@@ -3014,6 +3014,25 @@ func _sync_layer_indices(project: Project) -> void:
 	project.order_layers(project.current_frame)
 
 
+func _ensure_pixel_cel_size(project: Project, cel: PixelCel) -> void:
+	if cel == null:
+		return
+	var img := cel.image
+	if img == null:
+		return
+	var target_w := project.size.x
+	var target_h := project.size.y
+	if img.get_width() == target_w and img.get_height() == target_h:
+		return
+	var fixed := project.new_empty_image()
+	var src_w := min(img.get_width(), target_w)
+	var src_h := min(img.get_height(), target_h)
+	var src_rect := Rect2i(Vector2i.ZERO, Vector2i(src_w, src_h))
+	fixed.blit_rect(img, src_rect, Vector2i.ZERO)
+	cel.image = fixed
+	cel.update_texture()
+
+
 func _get_pixel_cel(frame: int, layer: int) -> PixelCel:
 	var project := Global.current_project
 	if frame < 0 or frame >= project.frames.size():
@@ -3022,6 +3041,7 @@ func _get_pixel_cel(frame: int, layer: int) -> PixelCel:
 		return null
 	var cel := project.frames[frame].cels[layer]
 	if cel is PixelCel:
+		_ensure_pixel_cel_size(project, cel)
 		return cel
 	return null
 

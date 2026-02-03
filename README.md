@@ -107,6 +107,34 @@ codex mcp add pixelorama \
 - “新建 32x32 画布，画一个红色圆点并导出 PNG。”
 - “把当前项目导出成 GIF，标签为 walk，方向 forward。”
 
+## 与 Gemini CLI 集成（0.26.0）
+
+在 `~/.gemini/settings.json` 中新增 `mcpServers.pixelorama`：
+
+```
+{
+  "mcpServers": {
+    "pixelorama": {
+      "command": "/Users/dandan/code/tool/Pixelorama-mcp/.venv/bin/python",
+      "args": ["-m", "pixelorama_mcp"],
+      "cwd": "/Users/dandan/code/tool/Pixelorama-mcp/server",
+      "env": {
+        "PYTHONPATH": "/Users/dandan/code/tool/Pixelorama-mcp/server",
+        "PIXELORAMA_BRIDGE_HOST": "127.0.0.1",
+        "PIXELORAMA_BRIDGE_PORT": "8123"
+      }
+    }
+  }
+}
+```
+
+如果启用了 token，需要在 `env` 里加：
+```
+"PIXELORAMA_BRIDGE_TOKEN": "YOUR_TOKEN"
+```
+
+修改后重启 Gemini CLI 即可生效。
+
 ## 协议与更多文档
 - Bridge 协议：`docs/bridge-protocol.md`
 - 能力清单：`docs/capabilities.md`
