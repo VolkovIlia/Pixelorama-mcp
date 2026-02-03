@@ -1,0 +1,10 @@
+{
+  "name": "PixeloramaMCP",
+  "display_name": "Pixelorama MCP Bridge",
+  "description": "Local IPC bridge for Pixelorama MCP server.",
+  "author": "Pixelorama MCP",
+  "version": "0.1.0",
+  "license": "MIT",
+  "supported_api_versions": [8],
+  "nodes": ["bridge.tscn"]
+}
