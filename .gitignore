@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 
 extension/dist/
+tmp/pixelorama_scene.png

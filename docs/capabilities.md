@@ -1,0 +1,27 @@
+# 能力清单
+
+- bridge: ping/version/info（含协议版本）
+- project: create/open/save/export/info/set_active/set_indexed_mode
+- project: import.sequence/import.spritesheet/export.animated/export.spritesheet
+- export: trim/scale/interpolation/split_layers/layer
+- layer: list/add/remove/rename/move
+- layer: get_props/set_props/group.create/parent.set
+- frame: list/add/remove/duplicate/move
+- pixel: get/set/set_many/get_region/set_region
+- draw: line/rect/ellipse/erase_line/text/gradient
+- brush: list/add/remove/clear/stamp/stroke（支持 jitter/spray/spacing_curve/混合模式）
+- pixel: replace_color
+- canvas: fill/clear/resize/crop
+- palette: list/select/create/delete/import/export
+- selection: clear/invert/rect/ellipse/lasso/move/export_mask
+- symmetry: set
+- animation: tags.list/tags.add/tags.update/tags.remove/playback.set
+- animation: fps.get/fps.set/frame_duration.set/loop.set
+- tilemap: tileset.list/create/add_tile/remove_tile/replace_tile
+- tilemap: layer.set_tileset/layer.set_params/offset.set/cell.get/cell.set/cell.clear
+- tilemap: fill_rect/replace_index/random_fill
+- effect: layer.list/layer.add/layer.remove/layer.move/layer.set_enabled/layer.set_params/layer.apply
+- effect: shader.apply/shader.list/shader.inspect/shader.schema（可校验参数）
+- history: undo/redo
+- three_d: object.list/object.add/object.remove/object.update
+- batch: exec

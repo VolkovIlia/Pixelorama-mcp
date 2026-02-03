@@ -1,20 +1,14 @@
 # Pixelorama MCP
 
-本项目提供 **独立 MCP server（stdio）** 与 **Pixelorama 扩展桥接插件**，实现无需 fork Pixelorama 的自动化能力。
-
-目录结构：
-- `server/` MCP 服务（stdio）
-- `extension/` Pixelorama 扩展插件（IPC 桥接）
-- `docs/` 设计与协议文档
+本项目提供 **独立 MCP server（stdio）** 与 **Pixelorama 扩展桥接插件**，无需 fork Pixelorama 即可自动化。
 
 ## 运行前提
-- 已安装 Pixelorama（官方仓库即可，不需要 fork）
-- 使用 Godot 运行 Pixelorama 时可启用扩展（GUI 或 headless 均可）
+- 已安装 Pixelorama（官方 App 即可）
 - Python 3.13.7（建议使用 uv 创建虚拟环境）
 
-## 安装与使用（完整流程）
+## 使用教程（完整流程）
 
-### 0) 创建虚拟环境（uv, Python 3.13.7）
+### 0) 创建虚拟环境（uv）
 
 ```
 cd /Users/dandan/code/tool/Pixelorama-mcp
@@ -25,12 +19,12 @@ source .venv/bin/activate
 ### 1) 构建扩展包
 
 ```
-python3 /Users/dandan/code/tool/Pixelorama-mcp/extension/build_extension_zip.py
+python3 extension/build_extension_zip.py
 ```
 
 产物：
 ```
-/Users/dandan/code/tool/Pixelorama-mcp/extension/dist/PixeloramaMCP.zip
+extension/dist/PixeloramaMCP.zip
 ```
 
 ### 2) 安装扩展包到 Pixelorama
@@ -43,9 +37,12 @@ python3 /Users/dandan/code/tool/Pixelorama-mcp/extension/build_extension_zip.py
 
 ### 3) 启动 Pixelorama
 
-**GUI 模式（推荐调试）**：直接启动 Pixelorama 应用即可。
+**GUI 模式（推荐）**：
+```
+/Applications/Pixelorama.app/Contents/MacOS/Pixelorama
+```
 
-**Headless 模式（自动化/CI）**：
+**Headless 模式（自动化/CI）**（可选）：
 ```
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path /path/to/Pixelorama
 ```
@@ -55,15 +52,20 @@ python3 /Users/dandan/code/tool/Pixelorama-mcp/extension/build_extension_zip.py
 ### 4) 启动 MCP Server（stdio）
 
 ```
-cd /Users/dandan/code/tool/Pixelorama-mcp/server
+cd server
 ../.venv/bin/python -m pixelorama_mcp
 ```
 
 可选环境变量：
 - `PIXELORAMA_BRIDGE_HOST`（默认 `127.0.0.1`）
 - `PIXELORAMA_BRIDGE_PORT`（默认 `8123`）
+- `PIXELORAMA_BRIDGE_PORTS`（例如 `8123,8124`，用于端口扫描）
+- `PIXELORAMA_BRIDGE_PORT_RANGE`（例如 `8123-8133`）
+- `PIXELORAMA_BRIDGE_TOKEN`（启用后所有请求需携带 `token`）
 
-### 5) 自动化测试脚本（推荐）
+如果启用 token，需要用同一个 token 启动 Pixelorama 与 MCP server。
+
+### 5) 自动化测试脚本
 
 ```
 ../.venv/bin/python /Users/dandan/code/tool/Pixelorama-mcp/tests/run_mcp_tests.py
@@ -71,37 +73,42 @@ cd /Users/dandan/code/tool/Pixelorama-mcp/server
 
 测试覆盖：导入/导出、图层/帧/像素、绘制、选择、动画、Tilemap、效果、笔刷、调色板等。
 
-## 当前已实现能力
-- project: create/open/save/export/info/set_active/set_indexed_mode
-- project: import.sequence/import.spritesheet/export.animated/export.spritesheet
-- layer: list/add/remove/rename/move
-- layer: get_props/set_props/group.create/parent.set
-- frame: list/add/remove/duplicate/move
-- pixel: get/set/set_many/get_region/set_region
-- draw: line/rect/ellipse/erase_line/text/gradient
-- brush: list/add/remove/clear/stamp/stroke
-- pixel: replace_color
-- canvas: fill/clear/resize/crop
-- palette: list/select/create/delete/import/export
-- selection: clear/invert/rect/ellipse/lasso/move/export_mask
-- symmetry: set
-- animation: tags.list/tags.add/tags.update/tags.remove/playback.set
-- animation: fps.get/fps.set/frame_duration.set/loop.set
-- tilemap: tileset.list/create/add_tile/remove_tile/replace_tile
-- tilemap: layer.set_tileset/layer.set_params/offset.set/cell.get/cell.set/cell.clear
-- tilemap: fill_rect/replace_index/random_fill
-- effect: layer.list/layer.add/layer.remove/layer.move/layer.set_enabled/layer.set_params/layer.apply
-- effect: shader.apply/shader.list/shader.inspect
-- history: undo/redo
-- three_d: object.list/object.add/object.remove/object.update
-- batch: exec
+扩展/边界测试（错误参数、协议与安全校验）：
+```
+../.venv/bin/python /Users/dandan/code/tool/Pixelorama-mcp/tests/run_mcp_tests_extra.py
+```
+
+## 与 Codex 集成
+
+### 1) 启动 Pixelorama（官方 App）
+
+> 如果启用 token，必须从终端启动 Pixelorama.app 才能注入环境变量。
+
+```
+PIXELORAMA_BRIDGE_TOKEN=YOUR_TOKEN \
+/Applications/Pixelorama.app/Contents/MacOS/Pixelorama
+```
+
+### 2) 注册 MCP Server 到 Codex
+
+```
+codex mcp add pixelorama \
+  --env PIXELORAMA_BRIDGE_HOST=127.0.0.1 \
+  --env PIXELORAMA_BRIDGE_PORT=8123 \
+  --env PIXELORAMA_BRIDGE_TOKEN=YOUR_TOKEN \
+  -- /Users/dandan/code/tool/Pixelorama-mcp/.venv/bin/python -m pixelorama_mcp
+```
+
+完成后在 Codex 里输入 `/mcp`，确认已连接到 `pixelorama`。
+
+### 3) 使用方式
+
+在 Codex 里直接描述需求即可，例如：
+- “新建 32x32 画布，画一个红色圆点并导出 PNG。”
+- “把当前项目导出成 GIF，标签为 walk，方向 forward。”
 
 ## 协议与更多文档
 - Bridge 协议：`docs/bridge-protocol.md`
+- 能力清单：`docs/capabilities.md`
 - 路线图：`docs/mcp-roadmap.md`
 - 详细步骤：`docs/setup.md`
-
-## 注意事项
-- MCP server 通过 stdio 运行，供 Codex/MCP 客户端调用。
-- Bridge 使用 TCP JSON-line 协议。
-- GUI/Headless 均可使用，只要 Pixelorama 进程在运行且扩展已启用。

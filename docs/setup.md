@@ -40,6 +40,9 @@ cd /Users/dandan/code/tool/Pixelorama-mcp/server
 环境变量（可选）：
 - `PIXELORAMA_BRIDGE_HOST`（默认 `127.0.0.1`）
 - `PIXELORAMA_BRIDGE_PORT`（默认 `8123`）
+- `PIXELORAMA_BRIDGE_PORTS`（例如 `8123,8124`，用于端口扫描）
+- `PIXELORAMA_BRIDGE_PORT_RANGE`（例如 `8123-8133`）
+- `PIXELORAMA_BRIDGE_TOKEN`（启用后所有请求需携带 `token`）
 
 ## 4) 自动化测试脚本（推荐）
 
@@ -48,6 +51,11 @@ cd /Users/dandan/code/tool/Pixelorama-mcp/server
 ```
 
 覆盖：导入/导出、图层/帧/像素、绘制、选择、动画、Tilemap、效果、笔刷、调色板等。
+
+扩展/边界测试（错误参数、协议/安全）：
+```
+../.venv/bin/python /Users/dandan/code/tool/Pixelorama-mcp/tests/run_mcp_tests_extra.py
+```
 
 ## 5) 说明
 

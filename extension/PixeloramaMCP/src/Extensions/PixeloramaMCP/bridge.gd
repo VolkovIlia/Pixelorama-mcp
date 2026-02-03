@@ -2,25 +2,39 @@ extends Node
 
 const DEFAULT_HOST := "127.0.0.1"
 const DEFAULT_PORT := 8123
+const BRIDGE_PROTOCOL_VERSION := "2024-11-05"
 
 var _server := TCPServer.new()
 var _peers := {}  # id -> StreamPeerTCP
 var _buffers := {}  # id -> PackedByteArray
 var _api: Node = null
+var _token := ""
+var _extension_version := ""
 
 
 func _ready() -> void:
 	_api = get_node_or_null("/root/ExtensionsApi")
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	if OS.has_environment("PIXELORAMA_BRIDGE_TOKEN"):
+		_token = OS.get_environment("PIXELORAMA_BRIDGE_TOKEN")
 	var host := DEFAULT_HOST
 	var port := DEFAULT_PORT
+	var port_locked := false
 	if OS.has_environment("PIXELORAMA_BRIDGE_HOST"):
 		host = OS.get_environment("PIXELORAMA_BRIDGE_HOST")
 	if OS.has_environment("PIXELORAMA_BRIDGE_PORT"):
 		var port_str := OS.get_environment("PIXELORAMA_BRIDGE_PORT")
 		if port_str.is_valid_int():
 			port = int(port_str)
+			port_locked = true
 	var err := _server.listen(port, host)
+	if err == ERR_ALREADY_IN_USE and not port_locked:
+		for offset in range(1, 21):
+			var candidate := port + offset
+			err = _server.listen(candidate, host)
+			if err == OK:
+				port = candidate
+				break
 	if err != OK:
 		push_error("Pixelorama MCP bridge listen failed: %s" % error_string(err))
 		return
@@ -83,6 +97,11 @@ func _handle_request(peer_id: String, line: String) -> void:
 		return
 
 	var req_id = data.get("id", "")
+	if not _token.is_empty():
+		var req_token := str(data.get("token", ""))
+		if req_token != _token:
+			_send_error(peer_id, req_id, "unauthorized", "invalid token")
+			return
 	var method = data.get("method", "")
 	var params = data.get("params", {})
 	if typeof(params) != TYPE_DICTIONARY:
@@ -126,6 +145,15 @@ func _dispatch_method(method: String, params: Dictionary, allow_batch: bool) -> 
 		if _api and _api.general:
 			version = _api.general.get_pixelorama_version()
 		return {"pixelorama": version}
+	if method == "bridge.info":
+		var version := ""
+		if _api and _api.general:
+			version = _api.general.get_pixelorama_version()
+		return {
+			"pixelorama": version,
+			"extension_version": _get_extension_version(),
+			"protocol_version": BRIDGE_PROTOCOL_VERSION
+		}
 	if method == "batch.exec":
 		if not allow_batch:
 			return _err("invalid_method", "nested batch not allowed")
@@ -302,6 +330,8 @@ func _dispatch_method(method: String, params: Dictionary, allow_batch: bool) -> 
 		return _handle_effect_shader_list()
 	if method == "effect.shader.inspect":
 		return _handle_effect_shader_inspect(params)
+	if method == "effect.shader.schema":
+		return _handle_effect_shader_schema(params)
 	if method == "history.undo":
 		return _handle_history_undo()
 	if method == "history.redo":
@@ -374,19 +404,76 @@ func _handle_project_save(params: Dictionary) -> Dictionary:
 
 
 func _handle_project_export(params: Dictionary) -> Dictionary:
+	if not _require_project():
+		return _err("no_project", "no current project")
 	var path := str(params.get("path", ""))
 	if path.is_empty():
-		return {"_error": {"code": "path_required", "message": "path is required"}}
-	var project := Global.current_project
+		return _err("path_required", "path is required")
+	var project: Project = Global.current_project
 	var frame := project.current_frame
 	if params.has("frame"):
 		frame = int(params.get("frame"))
 		frame = clampi(frame, 0, project.frames.size() - 1)
+	var trim := bool(params.get("trim", false))
+	var scale := int(params.get("scale", 100))
+	var interpolation := _parse_interpolation(params.get("interpolation", "nearest"))
+	var split_layers := bool(params.get("split_layers", false))
+	var layer_index := int(params.get("layer", -1))
+	if split_layers:
+		var paths := []
+		for i in project.layers.size():
+			var cel := project.frames[frame].cels[i]
+			if cel is not PixelCel:
+				continue
+			var layer := project.layers[i]
+			var image: Image = layer.display_effects(cel)
+			if trim:
+				image = image.get_region(image.get_used_rect())
+			if scale != 100:
+				image.resize(
+					int(round(image.get_width() * scale / 100.0)),
+					int(round(image.get_height() * scale / 100.0)),
+					interpolation
+				)
+			var layer_path := _export_layer_path(path, layer.name, i)
+			var err_layer := image.save_png(layer_path)
+			if err_layer != OK:
+				return _err("export_failed", error_string(err_layer))
+			paths.append(layer_path)
+		return {"paths": paths, "frame": frame}
+	if layer_index >= 0:
+		if layer_index >= project.layers.size():
+			return _err("invalid_index", "layer index out of range")
+		var layer_cel := project.frames[frame].cels[layer_index]
+		if layer_cel is not PixelCel:
+			return _err("invalid_cel", "not a PixelCel")
+		var layer_obj := project.layers[layer_index]
+		var layer_image: Image = layer_obj.display_effects(layer_cel)
+		if trim:
+			layer_image = layer_image.get_region(layer_image.get_used_rect())
+		if scale != 100:
+			layer_image.resize(
+				int(round(layer_image.get_width() * scale / 100.0)),
+				int(round(layer_image.get_height() * scale / 100.0)),
+				interpolation
+			)
+		var err_layer2 := layer_image.save_png(path)
+		if err_layer2 != OK:
+			return _err("export_failed", error_string(err_layer2))
+		return {"path": path, "frame": frame, "layer": layer_index}
 	var image := project.new_empty_image()
 	DrawingAlgos.blend_layers(image, project.frames[frame], Vector2i.ZERO, project)
+	if trim:
+		image = image.get_region(image.get_used_rect())
+	if scale != 100:
+		image.resize(
+			int(round(image.get_width() * scale / 100.0)),
+			int(round(image.get_height() * scale / 100.0)),
+			interpolation
+		)
 	var err := image.save_png(path)
 	if err != OK:
-		return {"_error": {"code": "export_failed", "message": error_string(err)}}
+		return _err("export_failed", error_string(err))
 	return {"path": path, "frame": frame}
 
 
@@ -399,10 +486,12 @@ func _handle_project_export_animated(params: Dictionary) -> Dictionary:
 	var format := str(params.get("format", "gif")).to_lower()
 	var project: Project = Global.current_project
 	Export.current_tab = Export.ExportTab.IMAGE
-	Export.split_layers = false
-	Export.erase_unselected_area = false
-	Export.trim_images = false
+	Export.split_layers = bool(params.get("split_layers", false))
+	Export.erase_unselected_area = bool(params.get("erase_unselected_area", false))
+	Export.trim_images = bool(params.get("trim", false))
 	Export.direction = Export.AnimationDirection.FORWARD
+	Export.resize = int(params.get("scale", 100))
+	Export.interpolation = _parse_interpolation(params.get("interpolation", "nearest"))
 	if params.has("direction"):
 		Export.direction = _parse_animation_direction(params.get("direction", "forward"))
 	Export.frame_current_tag = Export.ExportFrames.ALL_FRAMES
@@ -419,6 +508,7 @@ func _handle_project_export_animated(params: Dictionary) -> Dictionary:
 			Export.frame_current_tag = Export.ExportFrames.size() + tag_index
 	Export.cache_blended_frames(project)
 	Export.process_animation(project)
+	Export._scale_processed_images()
 	var frames: Array = []
 	for item in Export.processed_images:
 		var p: Export.ProcessedImage = item
@@ -457,10 +547,12 @@ func _handle_project_export_spritesheet(params: Dictionary) -> Dictionary:
 	Export.current_tab = Export.ExportTab.SPRITESHEET
 	Export.split_layers = false
 	Export.erase_unselected_area = false
-	Export.trim_images = false
+	Export.trim_images = bool(params.get("trim", false))
 	Export.orientation = _parse_spritesheet_orientation(params.get("orientation", "rows"))
 	Export.lines_count = int(params.get("lines", 1))
 	Export.frame_current_tag = Export.ExportFrames.ALL_FRAMES
+	Export.resize = int(params.get("scale", 100))
+	Export.interpolation = _parse_interpolation(params.get("interpolation", "nearest"))
 	if params.has("tag"):
 		var tag_name := str(params.get("tag", ""))
 		if not tag_name.is_empty():
@@ -473,6 +565,14 @@ func _handle_project_export_spritesheet(params: Dictionary) -> Dictionary:
 	if Export.processed_images.is_empty():
 		return _err("export_failed", "no image to export")
 	var sheet := Export.processed_images[0].image
+	if Export.trim_images:
+		sheet = sheet.get_region(sheet.get_used_rect())
+	if Export.resize != 100:
+		sheet.resize(
+			int(round(sheet.get_width() * Export.resize / 100.0)),
+			int(round(sheet.get_height() * Export.resize / 100.0)),
+			Export.interpolation
+		)
 	var err := sheet.save_png(path)
 	if err != OK:
 		return _err("export_failed", error_string(err))
@@ -574,12 +674,14 @@ func _handle_layer_add(params: Dictionary) -> Dictionary:
 			cels.append(layer_tilemap.new_empty_cel())
 		var insert_index := clampi(above + 1, 0, project.layers.size())
 		project.add_layers([layer_tilemap], PackedInt32Array([insert_index]), [cels])
+		_sync_layer_indices(project)
 	else:
 		ExtensionsApi.project.add_new_layer(above, "", layer_type)
 		if not name.is_empty():
 			var new_index := above + 1
 			if new_index >= 0 and new_index < project.layers.size():
 				project.layers[new_index].name = name
+		_sync_layer_indices(project)
 	return _handle_layer_list()
 
 
@@ -593,6 +695,7 @@ func _handle_layer_remove(params: Dictionary) -> Dictionary:
 	if index < 0 or index >= project.layers.size():
 		return _err("invalid_index", "layer index out of range")
 	project.remove_layers(PackedInt32Array([index]))
+	_sync_layer_indices(project)
 	project.change_cel(project.current_frame, clampi(project.current_layer, 0, project.layers.size() - 1))
 	return _handle_layer_list()
 
@@ -623,6 +726,7 @@ func _handle_layer_move(params: Dictionary) -> Dictionary:
 		return _err("invalid_index", "to out of range")
 	var layer := project.layers[from_idx]
 	project.move_layers(PackedInt32Array([from_idx]), PackedInt32Array([to_idx]), [layer.parent])
+	_sync_layer_indices(project)
 	return _handle_layer_list()
 
 
@@ -688,6 +792,7 @@ func _handle_layer_group_create(params: Dictionary) -> Dictionary:
 		cels.append(group.new_empty_cel())
 	var insert_index := clampi(above + 1, 0, project.layers.size())
 	project.add_layers([group], PackedInt32Array([insert_index]), [cels])
+	_sync_layer_indices(project)
 	return _handle_layer_list()
 
 
@@ -710,6 +815,8 @@ func _handle_layer_parent_set(params: Dictionary) -> Dictionary:
 			layer.parent = parent
 		else:
 			return _err("invalid_parent", "parent must be a GroupLayer")
+	_sync_layer_indices(project)
+	project.layers_updated.emit()
 	return _handle_layer_get_props({"index": index})
 
 
@@ -2057,8 +2164,16 @@ func _handle_effect_layer_add(params: Dictionary) -> Dictionary:
 	var name := str(params.get("name", shader_path.get_file().get_basename()))
 	var category := str(params.get("category", ""))
 	var effect := LayerEffect.new(name, shader_res, category, {})
+	var validate := bool(params.get("validate", true))
 	if params.has("params") and typeof(params.get("params")) == TYPE_DICTIONARY:
-		effect.params = params.get("params")
+		var incoming: Dictionary = params.get("params")
+		if validate:
+			var normalized := _normalize_shader_params(shader_res, incoming, true)
+			if normalized.has("_error"):
+				return normalized
+			effect.params = normalized.get("params", incoming)
+		else:
+			effect.params = incoming
 	effect.enabled = bool(params.get("enabled", true))
 	project.layers[layer_idx].effects.append(effect)
 	project.layers[layer_idx].emit_effects_added_removed()
@@ -2128,9 +2243,16 @@ func _handle_effect_layer_set_params(params: Dictionary) -> Dictionary:
 		return _err("invalid_index", "effect index out of range")
 	var effect := project.layers[layer_idx].effects[index]
 	if params.has("params") and typeof(params.get("params")) == TYPE_DICTIONARY:
+		var validate := bool(params.get("validate", true))
+		var incoming: Dictionary = params.get("params")
+		if validate and is_instance_valid(effect.shader):
+			var normalized := _normalize_shader_params(effect.shader, incoming, true)
+			if normalized.has("_error"):
+				return normalized
+			incoming = normalized.get("params", incoming)
 		var new_params: Dictionary = effect.params.duplicate()
-		for key in params.get("params"):
-			new_params[key] = params.get("params")[key]
+		for key in incoming:
+			new_params[key] = incoming[key]
 		effect.params = new_params
 	project.layers[layer_idx].emit_effects_added_removed()
 	return _handle_effect_layer_list({"layer": layer_idx})
@@ -2183,6 +2305,12 @@ func _handle_effect_shader_apply(params: Dictionary) -> Dictionary:
 	var params_dict := {}
 	if params.has("params") and typeof(params.get("params")) == TYPE_DICTIONARY:
 		params_dict = params.get("params")
+	var validate := bool(params.get("validate", true))
+	if params_dict.size() > 0 and validate:
+		var normalized := _normalize_shader_params(shader_res, params_dict, true)
+		if normalized.has("_error"):
+			return normalized
+		params_dict = normalized.get("params", params_dict)
 	var gen := ShaderImageEffect.new()
 	gen.generate_image((cel as PixelCel).get_image(), shader_res, params_dict, project.size)
 	if cel is CelTileMap:
@@ -2216,8 +2344,19 @@ func _handle_effect_shader_inspect(params: Dictionary) -> Dictionary:
 	var shader := load(path)
 	if not is_instance_valid(shader) or shader is not Shader:
 		return _err("invalid_shader", "shader not found")
-	var uniforms: Array = shader.get_uniform_list()
+	var uniforms: Array = _parse_shader_uniforms(shader)
 	return {"shader_path": path, "uniforms": uniforms}
+
+
+func _handle_effect_shader_schema(params: Dictionary) -> Dictionary:
+	var path := str(params.get("shader_path", ""))
+	if path.is_empty():
+		return _err("invalid_params", "shader_path required")
+	var shader := load(path)
+	if not is_instance_valid(shader) or shader is not Shader:
+		return _err("invalid_shader", "shader not found")
+	var schema: Array = _shader_uniform_schema(shader)
+	return {"shader_path": path, "schema": schema}
 
 
 func _handle_history_undo() -> Dictionary:
@@ -2308,7 +2447,20 @@ func _handle_brush_stamp(params: Dictionary) -> Dictionary:
 		return _err("invalid_brush", "brush not found")
 	var color := _parse_color(params.get("color", null))
 	var opacity := float(params.get("opacity", 1.0))
-	_apply_brush(cel.image, brush, Vector2i(x, y), color, opacity, str(params.get("mode", "paint")))
+	var jitter := float(params.get("jitter", 0.0))
+	var spray := int(params.get("spray", 0))
+	var spray_radius := float(params.get("spray_radius", 0.0))
+	_apply_brush_with_variation(
+		cel.image,
+		brush,
+		Vector2i(x, y),
+		color,
+		opacity,
+		str(params.get("mode", "paint")),
+		jitter,
+		spray,
+		spray_radius
+	)
 	cel.update_texture()
 	return {"ok": true}
 
@@ -2335,6 +2487,12 @@ func _handle_brush_stroke(params: Dictionary) -> Dictionary:
 	var opacity := float(params.get("opacity", 1.0))
 	var spacing := float(params.get("spacing", 1.0))
 	var mode := str(params.get("mode", "paint"))
+	var jitter := float(params.get("jitter", 0.0))
+	var spray := int(params.get("spray", 0))
+	var spray_radius := float(params.get("spray_radius", 0.0))
+	var curve: Dictionary = _parse_spacing_curve(params.get("spacing_curve", null))
+	var total_length := _polyline_length(points)
+	var traveled := 0.0
 	for i in range(points.size() - 1):
 		var a: Variant = points[i]
 		var b: Variant = points[i + 1]
@@ -2342,19 +2500,33 @@ func _handle_brush_stroke(params: Dictionary) -> Dictionary:
 			continue
 		if a.size() < 2 or b.size() < 2:
 			continue
-		var x1 := float(a[0])
-		var y1 := float(a[1])
-		var x2 := float(b[0])
-		var y2 := float(b[1])
-		var dx := x2 - x1
-		var dy := y2 - y1
-		var dist := sqrt(dx * dx + dy * dy)
-		var steps := int(dist / max(1.0, spacing))
+		var v1 := Vector2(float(a[0]), float(a[1]))
+		var v2 := Vector2(float(b[0]), float(b[1]))
+		var segment := v2 - v1
+		var dist := segment.length()
+		var t0 := 0.0
+		if total_length > 0.0:
+			t0 = traveled / total_length
+		var spacing_mul: float = _spacing_curve_value(curve, t0)
+		var step: float = spacing * spacing_mul
+		if step < 0.5:
+			step = 0.5
+		var steps := int(dist / step)
 		for s in range(steps + 1):
 			var t := 0.0 if steps == 0 else float(s) / float(steps)
-			var px := int(round(x1 + dx * t))
-			var py := int(round(y1 + dy * t))
-			_apply_brush(cel.image, brush, Vector2i(px, py), color, opacity, mode)
+			var pos := v1 + segment * t
+			_apply_brush_with_variation(
+				cel.image,
+				brush,
+				Vector2i(int(round(pos.x)), int(round(pos.y))),
+				color,
+				opacity,
+				mode,
+				jitter,
+				spray,
+				spray_radius
+			)
+		traveled += dist
 	cel.update_texture()
 	return {"ok": true}
 
@@ -2549,6 +2721,252 @@ func _handle_three_d_object_update(params: Dictionary) -> Dictionary:
 	return {"ok": true}
 
 
+func _shader_uniform_schema(shader: Shader) -> Array:
+	return _parse_shader_uniforms(shader)
+
+
+func _parse_shader_uniforms(shader: Shader) -> Array:
+	var code_lines: Array = shader.code.split("\n")
+	var uniforms: Array = []
+	var uniform_data: Array = []
+	var current_group := ""
+	for line in code_lines:
+		var stripped := String(line).strip_edges()
+		if stripped.begins_with("// uniform_data"):
+			uniform_data.append(stripped)
+		if stripped.begins_with("group_uniforms"):
+			var parts := stripped.split(" ")
+			if parts.size() >= 2:
+				current_group = parts[1]
+			continue
+		if not stripped.begins_with("uniform"):
+			continue
+		var uniform_split := stripped.split("=")
+		var u_value := ""
+		if uniform_split.size() > 1:
+			u_value = uniform_split[1].replace(";", "").strip_edges()
+		else:
+			uniform_split[0] = uniform_split[0].replace(";", "").strip_edges()
+		var u_left_side := uniform_split[0].split(":")
+		var u_hint := ""
+		if u_left_side.size() > 1:
+			u_hint = u_left_side[1].strip_edges().replace(";", "")
+		var left := u_left_side[0].replace(";", "").strip_edges()
+		var raw_tokens := left.split(" ")
+		var tokens: Array = []
+		for t in raw_tokens:
+			var s := String(t)
+			if not s.is_empty():
+				tokens.append(s)
+		if tokens.size() < 3:
+			continue
+		var u_name := String(tokens[tokens.size() - 1])
+		if u_name in ["PXO_time", "PXO_frame_index", "PXO_layer_index"]:
+			continue
+		var u_type := String(tokens[1])
+		var custom_data: Array = []
+		var type_override := ""
+		for data in uniform_data:
+			if u_name in data:
+				custom_data.append(data)
+				var line_to_examine := String(data).split(" ")
+				if line_to_examine.size() >= 4 and line_to_examine[3] == "type::":
+					var temp_splitter := String(data).split("::")
+					if temp_splitter.size() > 1:
+						type_override = temp_splitter[1].strip_edges()
+		uniforms.append(
+			{
+				"name": u_name,
+				"type": u_type,
+				"hint": u_hint,
+				"default": u_value,
+				"group": current_group,
+				"custom": type_override,
+				"data": custom_data
+			}
+		)
+	return uniforms
+
+
+func _normalize_shader_params(shader: Shader, params: Dictionary, strict: bool) -> Dictionary:
+	var schema: Array = _shader_uniform_schema(shader)
+	var lookup: Dictionary = {}
+	for item in schema:
+		lookup[item["name"]] = item
+	var normalized: Dictionary = {}
+	for key in params.keys():
+		var name := str(key)
+		if not lookup.has(name):
+			if strict:
+				return _err("invalid_param", "unknown uniform: " + name)
+			normalized[name] = params[key]
+			continue
+		var info: Dictionary = lookup[name]
+		var converted := _coerce_shader_param(name, info, params[key], strict)
+		if converted.has("_error"):
+			return converted
+		normalized[name] = converted.get("value", params[key])
+	return {"params": normalized, "schema": schema}
+
+
+func _coerce_shader_param(name: String, info: Dictionary, value: Variant, strict: bool) -> Dictionary:
+	var hint := str(info.get("hint", ""))
+	var type_val: Variant = info.get("type", TYPE_NIL)
+	if typeof(type_val) == TYPE_INT:
+		var t := int(type_val)
+		if t == TYPE_FLOAT:
+			if typeof(value) == TYPE_FLOAT or typeof(value) == TYPE_INT:
+				var v := float(value)
+				return _validate_number_range(name, v, hint, strict)
+			return _err("invalid_param", "expected float for " + name)
+		if t == TYPE_INT:
+			if typeof(value) == TYPE_FLOAT or typeof(value) == TYPE_INT:
+				var v2 := int(round(float(value)))
+				return _validate_number_range(name, float(v2), hint, strict)
+			return _err("invalid_param", "expected int for " + name)
+		if t == TYPE_BOOL:
+			return {"value": bool(value)}
+		if t == TYPE_VECTOR2:
+			if typeof(value) == TYPE_VECTOR2:
+				return {"value": value}
+			if typeof(value) == TYPE_ARRAY and value.size() >= 2:
+				return {"value": Vector2(float(value[0]), float(value[1]))}
+			return _err("invalid_param", "expected vec2 for " + name)
+		if t == TYPE_VECTOR3:
+			if typeof(value) == TYPE_VECTOR3:
+				return {"value": value}
+			if typeof(value) == TYPE_ARRAY and value.size() >= 3:
+				return {"value": Vector3(float(value[0]), float(value[1]), float(value[2]))}
+			return _err("invalid_param", "expected vec3 for " + name)
+		if t == TYPE_VECTOR4:
+			if typeof(value) == TYPE_VECTOR4:
+				return {"value": value}
+			if typeof(value) == TYPE_ARRAY and value.size() >= 4:
+				return {"value": Vector4(float(value[0]), float(value[1]), float(value[2]), float(value[3]))}
+			return _err("invalid_param", "expected vec4 for " + name)
+		if t == TYPE_COLOR:
+			if typeof(value) == TYPE_COLOR:
+				return {"value": value}
+			return {"value": _parse_color(value)}
+		return {"value": value}
+
+	var type_name := str(type_val).to_lower()
+	if type_name == "float":
+		if typeof(value) == TYPE_FLOAT or typeof(value) == TYPE_INT:
+			var v3 := float(value)
+			return _validate_number_range(name, v3, hint, strict)
+		return _err("invalid_param", "expected float for " + name)
+	if type_name == "int":
+		if typeof(value) == TYPE_FLOAT or typeof(value) == TYPE_INT:
+			var v4 := int(round(float(value)))
+			return _validate_number_range(name, float(v4), hint, strict)
+		return _err("invalid_param", "expected int for " + name)
+	if type_name == "bool":
+		return {"value": bool(value)}
+	if type_name in ["vec2", "ivec2", "uvec2"]:
+		if typeof(value) == TYPE_VECTOR2:
+			return {"value": value}
+		if typeof(value) == TYPE_ARRAY and value.size() >= 2:
+			return {"value": Vector2(float(value[0]), float(value[1]))}
+		return _err("invalid_param", "expected vec2 for " + name)
+	if type_name in ["vec3", "ivec3", "uvec3"]:
+		if typeof(value) == TYPE_VECTOR3:
+			return {"value": value}
+		if typeof(value) == TYPE_ARRAY and value.size() >= 3:
+			return {"value": Vector3(float(value[0]), float(value[1]), float(value[2]))}
+		return _err("invalid_param", "expected vec3 for " + name)
+	if type_name in ["vec4", "ivec4", "uvec4"]:
+		if typeof(value) == TYPE_VECTOR4:
+			return {"value": value}
+		if typeof(value) == TYPE_ARRAY and value.size() >= 4:
+			return {"value": Vector4(float(value[0]), float(value[1]), float(value[2]), float(value[3]))}
+		return {"value": _parse_color(value)}
+	return {"value": value}
+
+
+func _validate_number_range(name: String, value: float, hint: String, strict: bool) -> Dictionary:
+	var range := _parse_hint_range(hint)
+	if range.is_empty():
+		return {"value": value}
+	var min_v := float(range.get("min", value))
+	var max_v := float(range.get("max", value))
+	if value < min_v or value > max_v:
+		if strict:
+			return _err("invalid_param", "value out of range for " + name)
+	return {"value": clampf(value, min_v, max_v)}
+
+
+func _parse_hint_range(hint: String) -> Dictionary:
+	if not hint.contains("hint_range"):
+		return {}
+	var start := hint.find("hint_range(")
+	if start == -1:
+		return {}
+	var end := hint.find(")", start)
+	if end == -1:
+		return {}
+	var inside := hint.substr(start + "hint_range(".length(), end - (start + "hint_range(".length()))
+	var parts := inside.split(",", false)
+	if parts.size() < 2:
+		return {}
+	if not parts[0].strip_edges().is_valid_float():
+		return {}
+	if not parts[1].strip_edges().is_valid_float():
+		return {}
+	var result := {"min": float(parts[0]), "max": float(parts[1])}
+	if parts.size() >= 3 and parts[2].strip_edges().is_valid_float():
+		result["step"] = float(parts[2])
+	return result
+
+
+func _parse_interpolation(value) -> int:
+	if typeof(value) == TYPE_INT:
+		return int(value)
+	var v := str(value).to_lower()
+	if v == "linear" or v == "bilinear":
+		return Image.INTERPOLATE_BILINEAR
+	if v == "cubic":
+		return Image.INTERPOLATE_CUBIC
+	return Image.INTERPOLATE_NEAREST
+
+
+func _export_layer_path(base_path: String, layer_name: String, index: int) -> String:
+	var ext := base_path.get_extension()
+	var base := base_path
+	if not ext.is_empty():
+		base = base_path.substr(0, base_path.length() - ext.length() - 1)
+	var safe := layer_name.strip_edges()
+	safe = safe.replace(" ", "_").replace("/", "_").replace("\\", "_")
+	if safe.is_empty():
+		safe = "layer" + str(index)
+	if ext.is_empty():
+		return base + "_" + safe
+	return base + "_" + safe + "." + ext
+
+
+func _get_extension_version() -> String:
+	if not _extension_version.is_empty():
+		return _extension_version
+	var path := "res://src/Extensions/PixeloramaMCP/extension.json"
+	if not FileAccess.file_exists(path):
+		return ""
+	var file := FileAccess.open(path, FileAccess.READ)
+	if not is_instance_valid(file):
+		return ""
+	var text := file.get_as_text()
+	var json := JSON.new()
+	if json.parse(text) != OK:
+		return ""
+	var data: Dictionary = {}
+	if typeof(json.get_data()) == TYPE_DICTIONARY:
+		data = json.get_data()
+	else:
+		return ""
+	if data.has("version"):
+		_extension_version = str(data.get("version", ""))
+	return _extension_version
+
+
 func _parse_color(value) -> Color:
 	if typeof(value) == TYPE_STRING:
 		return Color.from_string(value, Color.TRANSPARENT)
@@ -2562,6 +2980,8 @@ func _parse_color(value) -> Color:
 		return Color(r, g, b, a)
 	if typeof(value) == TYPE_ARRAY:
 		var arr: Array = value
+		if arr.size() == 1 and typeof(arr[0]) == TYPE_STRING:
+			return Color.from_string(str(arr[0]), Color.TRANSPARENT)
 		var r := 0.0
 		var g := 0.0
 		var b := 0.0
@@ -2586,6 +3006,12 @@ func _err(code: String, message: String) -> Dictionary:
 
 func _require_project() -> bool:
 	return Global.current_project != null
+
+
+func _sync_layer_indices(project: Project) -> void:
+	for i in project.layers.size():
+		project.layers[i].index = i
+	project.order_layers(project.current_frame)
 
 
 func _get_pixel_cel(frame: int, layer: int) -> PixelCel:
@@ -2995,7 +3421,8 @@ func _apply_brush(
 	brush_img.copy_from(brush)
 	var size := brush_img.get_size()
 	var dst := pos - size / 2
-	if mode == "erase":
+	var mode_l := mode.to_lower()
+	if mode_l == "erase":
 		var blank := Image.create(size.x, size.y, false, target.get_format())
 		blank.fill(Color(0, 0, 0, 0))
 		target.blit_rect_mask(blank, brush_img, Rect2i(Vector2i.ZERO, size), dst)
@@ -3008,7 +3435,177 @@ func _apply_brush(
 			var c := color
 			c.a = pix.a * opacity
 			brush_img.set_pixel(x, y, c)
-	target.blend_rect(brush_img, Rect2i(Vector2i.ZERO, size), dst)
+	if mode_l == "paint" or mode_l == "normal":
+		target.blend_rect(brush_img, Rect2i(Vector2i.ZERO, size), dst)
+		return
+	for y2 in size.y:
+		for x2 in size.x:
+			var src := brush_img.get_pixel(x2, y2)
+			if src.a <= 0.0:
+				continue
+			var tx := dst.x + x2
+			var ty := dst.y + y2
+			if tx < 0 or ty < 0 or tx >= target.get_width() or ty >= target.get_height():
+				continue
+			var dst_c := target.get_pixel(tx, ty)
+			var blended := _blend_mode_color(src, dst_c, mode_l)
+			var out_r := dst_c.r * (1.0 - src.a) + blended.r * src.a
+			var out_g := dst_c.g * (1.0 - src.a) + blended.g * src.a
+			var out_b := dst_c.b * (1.0 - src.a) + blended.b * src.a
+			var out_a := dst_c.a + src.a * (1.0 - dst_c.a)
+			target.set_pixel(tx, ty, Color(out_r, out_g, out_b, out_a))
+
+
+func _apply_brush_with_variation(
+	target: Image,
+	brush: Image,
+	pos: Vector2i,
+	color: Color,
+	opacity: float,
+	mode: String,
+	jitter: float,
+	spray: int,
+	spray_radius: float
+) -> void:
+	if spray > 0:
+		for i in range(spray):
+			var offset := _random_offset(spray_radius)
+			var jitter_offset := _random_offset(jitter)
+			_apply_brush(target, brush, pos + offset + jitter_offset, color, opacity, mode)
+		return
+	var jitter_offset2 := _random_offset(jitter)
+	_apply_brush(target, brush, pos + jitter_offset2, color, opacity, mode)
+
+
+func _random_offset(radius: float) -> Vector2i:
+	if radius <= 0.0:
+		return Vector2i.ZERO
+	var angle := randf() * TAU
+	var r := sqrt(randf()) * radius
+	return Vector2i(int(round(cos(angle) * r)), int(round(sin(angle) * r)))
+
+
+func _blend_mode_color(src: Color, dst: Color, mode: String) -> Color:
+	match mode:
+		"multiply":
+			return Color(dst.r * src.r, dst.g * src.g, dst.b * src.b, 1.0)
+		"screen":
+			return Color(
+				1.0 - (1.0 - dst.r) * (1.0 - src.r),
+				1.0 - (1.0 - dst.g) * (1.0 - src.g),
+				1.0 - (1.0 - dst.b) * (1.0 - src.b),
+				1.0
+			)
+		"overlay":
+			return Color(
+				_blend_overlay(dst.r, src.r),
+				_blend_overlay(dst.g, src.g),
+				_blend_overlay(dst.b, src.b),
+				1.0
+			)
+		"add":
+			return Color(
+				min(dst.r + src.r, 1.0),
+				min(dst.g + src.g, 1.0),
+				min(dst.b + src.b, 1.0),
+				1.0
+			)
+		"subtract":
+			return Color(
+				max(dst.r - src.r, 0.0),
+				max(dst.g - src.g, 0.0),
+				max(dst.b - src.b, 0.0),
+				1.0
+			)
+		"replace":
+			return Color(src.r, src.g, src.b, 1.0)
+		_:
+			return Color(src.r, src.g, src.b, 1.0)
+
+
+func _blend_overlay(dst: float, src: float) -> float:
+	if dst < 0.5:
+		return 2.0 * dst * src
+	return 1.0 - 2.0 * (1.0 - dst) * (1.0 - src)
+
+
+func _parse_spacing_curve(value) -> Dictionary:
+	var curve: Dictionary = {"type": "none"}
+	if typeof(value) == TYPE_STRING:
+		curve["type"] = "preset"
+		curve["name"] = str(value).to_lower()
+		return curve
+	if typeof(value) == TYPE_ARRAY:
+		var arr: Array = value
+		if arr.is_empty():
+			return curve
+		var points: Array = []
+		if typeof(arr[0]) == TYPE_DICTIONARY:
+			for item in arr:
+				if typeof(item) != TYPE_DICTIONARY:
+					continue
+				var t := float(item.get("t", 0.0))
+				var v := float(item.get("value", 1.0))
+				points.append(Vector2(t, v))
+		else:
+			for i in range(arr.size()):
+				var v2 := float(arr[i])
+				var t2 := 0.0
+				if arr.size() > 1:
+					t2 = float(i) / float(arr.size() - 1)
+				points.append(Vector2(t2, v2))
+		if not points.is_empty():
+			points.sort_custom(func(a, b): return a.x < b.x)
+			curve["type"] = "points"
+			curve["points"] = points
+	return curve
+
+
+func _spacing_curve_value(curve: Dictionary, t: float) -> float:
+	if curve.is_empty():
+		return 1.0
+	var curve_type := str(curve.get("type", "none"))
+	if curve_type == "preset":
+		var name := str(curve.get("name", "linear"))
+		if name == "ease_in":
+			return 0.5 + 0.5 * t
+		if name == "ease_out":
+			return 1.5 - 0.5 * t
+		if name == "ease_in_out":
+			return 0.75 + 0.5 * (1.0 - abs(2.0 * t - 1.0))
+		return 1.0
+	if curve_type == "points":
+		var points: Array = curve.get("points", [])
+		if points.is_empty():
+			return 1.0
+		if t <= points[0].x:
+			return max(0.1, points[0].y)
+		if t >= points[points.size() - 1].x:
+			return max(0.1, points[points.size() - 1].y)
+		for i in range(points.size() - 1):
+			var a: Vector2 = points[i]
+			var b: Vector2 = points[i + 1]
+			if t >= a.x and t <= b.x:
+				var local_t := 0.0
+				if b.x > a.x:
+					local_t = (t - a.x) / (b.x - a.x)
+				return max(0.1, lerp(a.y, b.y, local_t))
+	return 1.0
+
+
+func _polyline_length(points: Array) -> float:
+	var total := 0.0
+	for i in range(points.size() - 1):
+		var a: Variant = points[i]
+		var b: Variant = points[i + 1]
+		if typeof(a) != TYPE_ARRAY or typeof(b) != TYPE_ARRAY:
+			continue
+		if a.size() < 2 or b.size() < 2:
+			continue
+		var v1 := Vector2(float(a[0]), float(a[1]))
+		var v2 := Vector2(float(b[0]), float(b[1]))
+		total += (v2 - v1).length()
+	return total
 
 
 func _color_to_array(color: Color) -> Array:

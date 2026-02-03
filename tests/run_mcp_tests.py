@@ -80,6 +80,7 @@ def _call_tool(client, tool_name, arguments=None, msg_id=1):
         arguments = {}
     client.send(
         {
+            "jsonrpc": "2.0",
             "id": msg_id,
             "method": "tools/call",
             "params": {"name": tool_name, "arguments": arguments},
@@ -96,7 +97,26 @@ def _require_result(resp, label):
         raise AssertionError(f"{label} error: {err.get('code')} {err.get('message')}")
     if "result" not in resp:
         raise AssertionError(f"{label} missing result")
-    return resp["result"]
+    result = resp["result"]
+    if isinstance(result, dict) and "content" in result:
+        return _extract_content_json(result["content"])
+    return result
+
+
+def _extract_content_json(content):
+    if not isinstance(content, list):
+        return content
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "json":
+            return item.get("json")
+        if item.get("type") == "text":
+            try:
+                return json.loads(item.get("text", ""))
+            except json.JSONDecodeError:
+                return item.get("text")
+    return None
 
 
 def main():
@@ -113,11 +133,11 @@ def main():
 
     try:
         print("[1/16] initialize")
-        client.send({"id": 1, "method": "initialize", "params": {}})
+        client.send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
         _require_result(client.recv(), "initialize")
 
         print("[2/16] tools/list")
-        client.send({"id": 2, "method": "tools/list", "params": {}})
+        client.send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         _require_result(client.recv(), "tools/list")
 
         print("[3/16] bridge")
@@ -358,9 +378,13 @@ def main():
             _call_tool(client, "effect.shader.inspect", {"shader_path": shader_path}, msg_id=38),
             "effect.shader.inspect",
         )
+        _require_result(
+            _call_tool(client, "effect.shader.schema", {"shader_path": shader_path}, msg_id=39),
+            "effect.shader.schema",
+        )
 
         print("[12/16] brush + palette")
-        palettes = _require_result(_call_tool(client, "palette.list", {}, msg_id=39), "palette.list")
+        palettes = _require_result(_call_tool(client, "palette.list", {}, msg_id=40), "palette.list")
         palette_name = None
         for item in palettes.get("palettes", []):
             if item.get("name"):
@@ -369,66 +393,108 @@ def main():
         if not palette_name:
             raise AssertionError("palette.list empty")
         _require_result(
-            _call_tool(client, "palette.export", {"name": palette_name, "path": TMP_PALETTE}, msg_id=40),
+            _call_tool(client, "palette.export", {"name": palette_name, "path": TMP_PALETTE}, msg_id=41),
             "palette.export",
         )
         if not os.path.exists(TMP_PALETTE) or os.path.getsize(TMP_PALETTE) == 0:
             raise AssertionError("palette.export file missing")
-        _require_result(_call_tool(client, "palette.import", {"path": TMP_PALETTE}, msg_id=41), "palette.import")
-        _require_result(_call_tool(client, "brush.list", {}, msg_id=42), "brush.list")
+        _require_result(_call_tool(client, "palette.import", {"path": TMP_PALETTE}, msg_id=42), "palette.import")
+        _require_result(_call_tool(client, "brush.list", {}, msg_id=43), "brush.list")
         _require_result(
-            _call_tool(client, "brush.add", {"data": region.get("data", "")}, msg_id=43),
+            _call_tool(client, "brush.add", {"data": region.get("data", "")}, msg_id=44),
             "brush.add",
         )
-        brush_list = _require_result(_call_tool(client, "brush.list", {}, msg_id=44), "brush.list")
+        brush_list = _require_result(_call_tool(client, "brush.list", {}, msg_id=45), "brush.list")
         brush_index = None
         if brush_list.get("brushes"):
             brush_index = brush_list["brushes"][-1]["index"]
         if brush_index is None:
             raise AssertionError("brush.add failed")
         _require_result(
-            _call_tool(client, "brush.stamp", {"x": 4, "y": 4, "brush_index": brush_index}, msg_id=45),
+            _call_tool(
+                client,
+                "brush.stamp",
+                {"x": 4, "y": 4, "brush_index": brush_index, "mode": "multiply", "jitter": 1, "spray": 3, "spray_radius": 1},
+                msg_id=46,
+            ),
             "brush.stamp",
         )
         _require_result(
             _call_tool(
                 client,
                 "brush.stroke",
-                {"points": [[1, 1], [6, 1]], "brush_index": brush_index, "spacing": 1},
-                msg_id=46,
+                {
+                    "points": [[1, 1], [6, 1]],
+                    "brush_index": brush_index,
+                    "spacing": 1,
+                    "spacing_curve": "ease_in_out",
+                    "mode": "screen",
+                    "jitter": 0.5,
+                },
+                msg_id=47,
             ),
             "brush.stroke",
         )
-        _require_result(_call_tool(client, "brush.remove", {"index": brush_index}, msg_id=47), "brush.remove")
-        _require_result(_call_tool(client, "brush.clear", {}, msg_id=48), "brush.clear")
+        _require_result(_call_tool(client, "brush.remove", {"index": brush_index}, msg_id=48), "brush.remove")
+        _require_result(_call_tool(client, "brush.clear", {}, msg_id=49), "brush.clear")
 
         print("[13/16] save + export")
-        _require_result(_call_tool(client, "project.save", {"path": TMP_PXO}, msg_id=49), "project.save")
-        _require_result(_call_tool(client, "project.export", {"path": TMP_PNG}, msg_id=50), "project.export")
+        _require_result(_call_tool(client, "project.save", {"path": TMP_PXO}, msg_id=50), "project.save")
         _require_result(
-            _call_tool(client, "project.export.animated", {"path": TMP_GIF, "format": "gif"}, msg_id=51),
+            _call_tool(
+                client,
+                "project.export",
+                {"path": TMP_PNG, "trim": True, "scale": 200, "interpolation": "nearest"},
+                msg_id=51,
+            ),
+            "project.export",
+        )
+        _require_result(
+            _call_tool(
+                client,
+                "project.export.animated",
+                {"path": TMP_GIF, "format": "gif", "trim": True, "scale": 100},
+                msg_id=52,
+            ),
             "project.export.animated",
         )
         _require_result(
-            _call_tool(client, "project.export.animated", {"path": TMP_APNG, "format": "apng"}, msg_id=52),
+            _call_tool(
+                client,
+                "project.export.animated",
+                {"path": TMP_APNG, "format": "apng"},
+                msg_id=53,
+            ),
             "project.export.animated",
         )
         _require_result(
             _call_tool(
                 client,
                 "project.export.spritesheet",
-                {"path": TMP_SPRITESHEET, "orientation": "rows", "lines": 1},
-                msg_id=53,
+                {"path": TMP_SPRITESHEET, "orientation": "rows", "lines": 1, "scale": 100},
+                msg_id=54,
             ),
             "project.export.spritesheet",
         )
+        split = _require_result(
+            _call_tool(
+                client,
+                "project.export",
+                {"path": "/tmp/pixelorama_mcp_layers.png", "split_layers": True},
+                msg_id=55,
+            ),
+            "project.export",
+        )
+        for p in split.get("paths", []):
+            if not os.path.exists(p) or os.path.getsize(p) == 0:
+                raise AssertionError(f"split export file missing: {p}")
         for path in (TMP_PNG, TMP_GIF, TMP_APNG, TMP_SPRITESHEET):
             if not os.path.exists(path) or os.path.getsize(path) == 0:
                 raise AssertionError(f"export file missing: {path}")
 
         print("[14/16] tilemap")
         layers = _require_result(
-            _call_tool(client, "layer.add", {"above": 0, "name": "Tilemap", "type": "tilemap"}, msg_id=54),
+            _call_tool(client, "layer.add", {"above": 0, "name": "Tilemap", "type": "tilemap"}, msg_id=56),
             "layer.add",
         )
         tilemap_layer = None
@@ -439,7 +505,7 @@ def main():
         if tilemap_layer is None:
             raise AssertionError("tilemap layer not found")
         tilesets = _require_result(
-            _call_tool(client, "tilemap.tileset.create", {"tile_size": [16, 16], "name": "ts"}, msg_id=55),
+            _call_tool(client, "tilemap.tileset.create", {"tile_size": [16, 16], "name": "ts"}, msg_id=57),
             "tilemap.tileset.create",
         )
         if not tilesets.get("tilesets"):
@@ -449,7 +515,7 @@ def main():
                 client,
                 "tilemap.tileset.add_tile",
                 {"tileset_index": 0, "path": TMP_PNG, "layer": tilemap_layer},
-                msg_id=56,
+                msg_id=58,
             ),
             "tilemap.tileset.add_tile",
         )
@@ -458,7 +524,7 @@ def main():
                 client,
                 "tilemap.tileset.add_tile",
                 {"tileset_index": 0, "path": TMP_PNG, "layer": tilemap_layer},
-                msg_id=57,
+                msg_id=59,
             ),
             "tilemap.tileset.add_tile",
         )
@@ -467,7 +533,7 @@ def main():
                 client,
                 "tilemap.layer.set_tileset",
                 {"layer": tilemap_layer, "tileset_index": 0},
-                msg_id=58,
+                msg_id=60,
             ),
             "tilemap.layer.set_tileset",
         )
@@ -476,7 +542,7 @@ def main():
                 client,
                 "tilemap.cell.set",
                 {"layer": tilemap_layer, "cell_x": 0, "cell_y": 0, "index": 1},
-                msg_id=59,
+                msg_id=61,
             ),
             "tilemap.cell.set",
         )
@@ -485,7 +551,7 @@ def main():
                 client,
                 "tilemap.cell.get",
                 {"layer": tilemap_layer, "cell_x": 0, "cell_y": 0},
-                msg_id=60,
+                msg_id=62,
             ),
             "tilemap.cell.get",
         )
@@ -494,7 +560,7 @@ def main():
                 client,
                 "tilemap.fill_rect",
                 {"layer": tilemap_layer, "cell_x": 0, "cell_y": 0, "width": 2, "height": 2, "index": 1},
-                msg_id=61,
+                msg_id=63,
             ),
             "tilemap.fill_rect",
         )
@@ -503,7 +569,7 @@ def main():
                 client,
                 "tilemap.replace_index",
                 {"layer": tilemap_layer, "from": 1, "to": 2},
-                msg_id=62,
+                msg_id=64,
             ),
             "tilemap.replace_index",
         )
@@ -512,14 +578,14 @@ def main():
                 client,
                 "tilemap.random_fill",
                 {"layer": tilemap_layer, "cell_x": 0, "cell_y": 0, "width": 2, "height": 2, "indices": [1, 2], "weights": [1, 2]},
-                msg_id=63,
+                msg_id=65,
             ),
             "tilemap.random_fill",
         )
 
         print("[15/16] symmetry")
         _require_result(
-            _call_tool(client, "symmetry.set", {"show_x": True, "show_y": True}, msg_id=64),
+            _call_tool(client, "symmetry.set", {"show_x": True, "show_y": True}, msg_id=66),
             "symmetry.set",
         )
 
@@ -529,7 +595,7 @@ def main():
                 client,
                 "project.import.spritesheet",
                 {"path": TMP_PNG, "horizontal": 1, "vertical": 1, "mode": "new_project"},
-                msg_id=65,
+                msg_id=67,
             ),
             "project.import.spritesheet",
         )
@@ -541,7 +607,7 @@ def main():
                 client,
                 "project.import.sequence",
                 {"paths": [TMP_PNG, seq_path], "mode": "new_project"},
-                msg_id=66,
+                msg_id=68,
             ),
             "project.import.sequence",
         )

@@ -20,6 +20,11 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
+        "name": "bridge.info",
+        "description": "Get bridge protocol and extension info.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
         "name": "project.create",
         "description": "Create a new project and make it current.",
         "inputSchema": {
@@ -58,10 +63,18 @@ TOOLS = [
     },
     {
         "name": "project.export",
-        "description": "Export current project frame to PNG (MVP).",
+        "description": "Export current project frame to PNG.",
         "inputSchema": {
             "type": "object",
-            "properties": {"path": {"type": "string"}, "frame": {"type": "integer"}},
+            "properties": {
+                "path": {"type": "string"},
+                "frame": {"type": "integer"},
+                "layer": {"type": "integer"},
+                "split_layers": {"type": "boolean"},
+                "trim": {"type": "boolean"},
+                "scale": {"type": "integer"},
+                "interpolation": {"type": "string"},
+            },
             "required": ["path"],
             "additionalProperties": False,
         },
@@ -817,6 +830,7 @@ TOOLS = [
                 "category": {"type": "string"},
                 "params": {"type": "object"},
                 "enabled": {"type": "boolean"},
+                "validate": {"type": "boolean"},
             },
             "required": ["shader_path"],
             "additionalProperties": False,
@@ -869,6 +883,7 @@ TOOLS = [
                 "layer": {"type": "integer"},
                 "index": {"type": "integer"},
                 "params": {"type": "object"},
+                "validate": {"type": "boolean"},
             },
             "required": ["index", "params"],
             "additionalProperties": False,
@@ -899,6 +914,7 @@ TOOLS = [
                 "frame": {"type": "integer"},
                 "shader_path": {"type": "string"},
                 "params": {"type": "object"},
+                "validate": {"type": "boolean"},
             },
             "required": ["shader_path"],
             "additionalProperties": False,
@@ -985,6 +1001,11 @@ TOOLS = [
                 "tag": {"type": "string"},
                 "tag_index": {"type": "integer"},
                 "direction": {"type": "string"},
+                "trim": {"type": "boolean"},
+                "scale": {"type": "integer"},
+                "interpolation": {"type": "string"},
+                "split_layers": {"type": "boolean"},
+                "erase_unselected_area": {"type": "boolean"},
             },
             "required": ["path"],
             "additionalProperties": False,
@@ -1000,6 +1021,9 @@ TOOLS = [
                 "orientation": {"type": "string"},
                 "lines": {"type": "integer"},
                 "tag": {"type": "string"},
+                "trim": {"type": "boolean"},
+                "scale": {"type": "integer"},
+                "interpolation": {"type": "string"},
             },
             "required": ["path"],
             "additionalProperties": False,
@@ -1191,6 +1215,16 @@ TOOLS = [
         },
     },
     {
+        "name": "effect.shader.schema",
+        "description": "Get standardized shader parameter schema.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"shader_path": {"type": "string"}},
+            "required": ["shader_path"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "brush.list",
         "description": "List project brushes.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
@@ -1236,6 +1270,9 @@ TOOLS = [
                 "color": {"type": ["array", "string", "object", "null"]},
                 "opacity": {"type": "number"},
                 "mode": {"type": "string"},
+                "jitter": {"type": "number"},
+                "spray": {"type": "integer"},
+                "spray_radius": {"type": "number"},
                 "frame": {"type": "integer"},
                 "layer": {"type": "integer"},
             },
@@ -1259,7 +1296,11 @@ TOOLS = [
                 "color": {"type": ["array", "string", "object", "null"]},
                 "opacity": {"type": "number"},
                 "spacing": {"type": "number"},
+                "spacing_curve": {"type": ["array", "string"]},
                 "mode": {"type": "string"},
+                "jitter": {"type": "number"},
+                "spray": {"type": "integer"},
+                "spray_radius": {"type": "number"},
                 "frame": {"type": "integer"},
                 "layer": {"type": "integer"},
             },
@@ -1293,9 +1334,40 @@ class StdioTransport:
     def __init__(self):
         self._stdin = sys.stdin.buffer
         self._stdout = sys.stdout.buffer
+        self._mode = None  # "lsp" or "line"
 
     def read_message(self) -> Optional[Dict[str, Any]]:
+        if self._mode == "line":
+            line = self._stdin.readline()
+            if not line:
+                return None
+            line = line.strip()
+            if not line:
+                return None
+            return json.loads(line.decode("utf-8"))
+
+        if self._mode == "lsp":
+            return self._read_lsp_message()
+
+        # Auto-detect framing based on the first line.
+        line = self._stdin.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            return None
+        stripped = line.lstrip()
+        if stripped.startswith(b"{"):
+            self._mode = "line"
+            return json.loads(stripped.decode("utf-8"))
+
+        self._mode = "lsp"
+        return self._read_lsp_message(first_line=line)
+
+    def _read_lsp_message(self, first_line: Optional[bytes] = None) -> Optional[Dict[str, Any]]:
         headers = {}
+        if first_line is not None:
+            key, _, value = first_line.decode("utf-8", errors="replace").partition(":")
+            headers[key.strip().lower()] = value.strip()
         while True:
             line = self._stdin.readline()
             if not line:
@@ -1313,6 +1385,11 @@ class StdioTransport:
         return json.loads(body.decode("utf-8"))
 
     def send_message(self, payload: Dict[str, Any]) -> None:
+        if self._mode == "line":
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
+            self._stdout.write(body)
+            self._stdout.flush()
+            return
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         header = f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8")
         self._stdout.write(header + body)
@@ -1325,6 +1402,7 @@ class MCPServer:
         host = os.environ.get("PIXELORAMA_BRIDGE_HOST", "127.0.0.1")
         port = int(os.environ.get("PIXELORAMA_BRIDGE_PORT", "8123"))
         self._bridge = BridgeClient(host=host, port=port)
+        self._bridge_protocol_checked = False
 
     def run(self) -> None:
         while True:
@@ -1347,15 +1425,27 @@ class MCPServer:
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "pixelorama-mcp", "version": "0.1.0"},
                 }
-                return self._ok(msg_id, result)
+                return self._ok(msg_id, result) if msg_id is not None else None
             if method == "tools/list":
-                return self._ok(msg_id, {"tools": TOOLS})
+                return self._ok(msg_id, {"tools": TOOLS}) if msg_id is not None else None
             if method == "tools/call":
-                return self._ok(msg_id, self._call_tool(params))
+                if msg_id is None:
+                    return None
+                tool_result = self._call_tool(params)
+                wrapped = {
+                    "content": [
+                        {"type": "text", "text": json.dumps(tool_result, ensure_ascii=False)}
+                    ]
+                }
+                return self._ok(msg_id, wrapped)
             if method in ("shutdown", "exit"):
-                return self._ok(msg_id, {"ok": True})
+                return self._ok(msg_id, {"ok": True}) if msg_id is not None else None
+            if msg_id is None:
+                return None
             return self._err(msg_id, "method_not_found", f"unknown method: {method}")
         except Exception as exc:  # guardrail to avoid crashing the server
+            if msg_id is None:
+                return None
             return self._err(msg_id, "internal_error", str(exc))
 
     def _call_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1365,6 +1455,10 @@ class MCPServer:
             return self._bridge.call("ping", args)
         if name == "bridge.version":
             return self._bridge.call("version", args)
+        if name == "bridge.info":
+            return self._bridge.call("bridge.info", args)
+        if name not in ("bridge.ping", "bridge.version", "bridge.info"):
+            self._ensure_bridge_protocol()
         if name == "project.create":
             return self._bridge.call("project.create", args)
         if name == "project.open":
@@ -1509,6 +1603,8 @@ class MCPServer:
             return self._bridge.call("effect.shader.list", args)
         if name == "effect.shader.inspect":
             return self._bridge.call("effect.shader.inspect", args)
+        if name == "effect.shader.schema":
+            return self._bridge.call("effect.shader.schema", args)
         if name == "history.undo":
             return self._bridge.call("history.undo", args)
         if name == "history.redo":
@@ -1569,11 +1665,26 @@ class MCPServer:
             return self._bridge.call("three_d.object.update", args)
         raise RuntimeError(f"unknown tool: {name}")
 
+    def _ensure_bridge_protocol(self) -> None:
+        if self._bridge_protocol_checked:
+            return
+        info = self._bridge.call("bridge.info", {})
+        protocol = info.get("protocol_version") if isinstance(info, dict) else None
+        if protocol != PROTOCOL_VERSION:
+            raise RuntimeError(
+                f"protocol_mismatch: expected {PROTOCOL_VERSION}, got {protocol}"
+            )
+        self._bridge_protocol_checked = True
+
     def _ok(self, msg_id: Any, result: Any) -> Dict[str, Any]:
-        return {"id": msg_id, "result": result}
+        return {"jsonrpc": "2.0", "id": msg_id, "result": result}
 
     def _err(self, msg_id: Any, code: str, message: str) -> Dict[str, Any]:
-        return {"id": msg_id, "error": {"code": code, "message": message}}
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": code, "message": message},
+        }
 
 
 def main():

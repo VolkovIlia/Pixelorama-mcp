@@ -39,12 +39,13 @@
 ## 当前实现的方法
 - `ping` -> {"message":"pong"}
 - `version` -> {"pixelorama":"vX.Y.Z"}
+- `bridge.info` -> {"pixelorama","extension_version","protocol_version"}
 - `project.create` -> 返回项目信息（name/size/frames/layers/current/save_path）
 - `project.open` -> 打开 `.pxo`，返回项目信息
 - `project.save` -> 保存 `.pxo`
-- `project.export` -> PNG（导出当前帧或指定帧）
-- `project.export.animated` -> GIF/APNG（可指定标签、方向）
-- `project.export.spritesheet` -> Spritesheet PNG（行/列布局）
+- `project.export` -> PNG（支持 trim/scale/interpolation/split_layers/layer）
+- `project.export.animated` -> GIF/APNG（支持标签/方向/trim/scale/interpolation/split_layers）
+- `project.export.spritesheet` -> Spritesheet PNG（支持行列布局/trim/scale/interpolation）
 - `project.import.sequence` -> 导入序列帧（新工程/追加）
 - `project.import.spritesheet` -> 导入 spritesheet（新工程/新图层）
 - `project.info` / `project.set_active` / `project.set_indexed_mode`
@@ -70,7 +71,7 @@
 - `tilemap.fill_rect` / `tilemap.replace_index` / `tilemap.random_fill`
 - `effect.layer.list` / `effect.layer.add` / `effect.layer.remove` / `effect.layer.move`
 - `effect.layer.set_enabled` / `effect.layer.set_params` / `effect.layer.apply`
-- `effect.shader.apply` / `effect.shader.list` / `effect.shader.inspect`
+- `effect.shader.apply` / `effect.shader.list` / `effect.shader.inspect` / `effect.shader.schema`
 - `history.undo` / `history.redo`
 - `three_d.object.list` / `three_d.object.add` / `three_d.object.remove` / `three_d.object.update`
 - `batch.exec`
@@ -79,3 +80,6 @@
 - `pixel.get_region` 返回 `data` 为 base64；`format=png` 或 `format=raw`。
 - `pixel.set_region` 支持 `mode=replace`（覆盖当前 cel）。
 - `batch.exec` 结果为 `results` 数组，每项含 `ok` 与 `result`/`error`。
+- 若设置 `PIXELORAMA_BRIDGE_TOKEN`，所有请求需携带 `token` 字段。
+- `brush.stamp`/`brush.stroke` 支持 `jitter`、`spray`、`spray_radius`、`spacing_curve` 与更多混合模式。
+- `effect.shader.apply` / `effect.layer.add` / `effect.layer.set_params` 支持 `validate` 参数进行校验。
