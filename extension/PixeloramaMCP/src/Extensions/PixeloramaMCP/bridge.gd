@@ -10,6 +10,13 @@ var _buffers := {}  # id -> PackedByteArray
 var _api: Node = null
 var _token := ""
 var _extension_version := ""
+var _dispatch_table: Dictionary = {}
+
+const Parsers = preload("helpers/parsers.gd")
+const Shaders = preload("helpers/shaders.gd")
+const Drawing = preload("helpers/drawing.gd")
+const BrushHelpers = preload("helpers/brushes.gd")
+const ExportUtils = preload("helpers/export.gd")
 
 
 func _ready() -> void:
@@ -39,6 +46,7 @@ func _ready() -> void:
 		push_error("Pixelorama MCP bridge listen failed: %s" % error_string(err))
 		return
 	set_process(true)
+	_init_dispatch_table()
 	print("Pixelorama MCP bridge listening on %s:%d" % [host, port])
 
 
@@ -137,239 +145,149 @@ func _send(peer_id: String, payload: Dictionary) -> void:
 	peer.put_data(data)
 
 
+func _init_dispatch_table() -> void:
+	_dispatch_table = {
+		"ping": func(p: Dictionary) -> Dictionary: return {"message": "pong"},
+		"version": _handle_version,
+		"bridge.info": _handle_bridge_info,
+		"batch.exec": _handle_batch_exec,
+		"project.create": _handle_project_create,
+		"project.open": _handle_project_open,
+		"project.save": _handle_project_save,
+		"project.export": _handle_project_export,
+		"project.info": _handle_project_info,
+		"project.set_active": _handle_project_set_active,
+		"project.set_indexed_mode": _handle_project_set_indexed_mode,
+		"project.import.sequence": _handle_project_import_sequence,
+		"project.import.spritesheet": _handle_project_import_spritesheet,
+		"project.export.animated": _handle_project_export_animated,
+		"project.export.spritesheet": _handle_project_export_spritesheet,
+		"layer.list": _handle_layer_list,
+		"layer.add": _handle_layer_add,
+		"layer.remove": _handle_layer_remove,
+		"layer.rename": _handle_layer_rename,
+		"layer.move": _handle_layer_move,
+		"layer.get_props": _handle_layer_get_props,
+		"layer.set_props": _handle_layer_set_props,
+		"layer.group.create": _handle_layer_group_create,
+		"layer.parent.set": _handle_layer_parent_set,
+		"frame.list": _handle_frame_list,
+		"frame.add": _handle_frame_add,
+		"frame.remove": _handle_frame_remove,
+		"frame.duplicate": _handle_frame_duplicate,
+		"frame.move": _handle_frame_move,
+		"pixel.get": _handle_pixel_get,
+		"pixel.set": _handle_pixel_set,
+		"pixel.set_many": _handle_pixel_set_many,
+		"pixel.get_region": _handle_pixel_get_region,
+		"pixel.set_region": _handle_pixel_set_region,
+		"pixel.replace_color": _handle_pixel_replace_color,
+		"canvas.fill": _handle_canvas_fill,
+		"canvas.clear": _handle_canvas_clear,
+		"canvas.resize": _handle_canvas_resize,
+		"canvas.crop": _handle_canvas_crop,
+		"canvas.snapshot": _handle_canvas_snapshot,
+		"palette.list": _handle_palette_list,
+		"palette.select": _handle_palette_select,
+		"palette.create": _handle_palette_create,
+		"palette.delete": _handle_palette_delete,
+		"palette.import": _handle_palette_import,
+		"palette.export": _handle_palette_export,
+		"draw.line": _handle_draw_line,
+		"draw.rect": _handle_draw_rect,
+		"draw.ellipse": _handle_draw_ellipse,
+		"draw.erase_line": _handle_draw_erase_line,
+		"draw.text": _handle_draw_text,
+		"draw.gradient": _handle_draw_gradient,
+		"selection.clear": _handle_selection_clear,
+		"selection.invert": _handle_selection_invert,
+		"selection.rect": _handle_selection_rect,
+		"selection.ellipse": _handle_selection_ellipse,
+		"selection.lasso": _handle_selection_lasso,
+		"selection.move": _handle_selection_move,
+		"selection.export_mask": _handle_selection_export_mask,
+		"symmetry.set": _handle_symmetry_set,
+		"animation.tags.list": _handle_animation_tags_list,
+		"animation.tags.add": _handle_animation_tags_add,
+		"animation.tags.update": _handle_animation_tags_update,
+		"animation.tags.remove": _handle_animation_tags_remove,
+		"animation.playback.set": _handle_animation_playback_set,
+		"animation.fps.get": _handle_animation_fps_get,
+		"animation.fps.set": _handle_animation_fps_set,
+		"animation.frame_duration.set": _handle_animation_frame_duration_set,
+		"animation.loop.set": _handle_animation_loop_set,
+		"tilemap.tileset.list": _handle_tilemap_tileset_list,
+		"tilemap.tileset.create": _handle_tilemap_tileset_create,
+		"tilemap.tileset.add_tile": _handle_tilemap_tileset_add_tile,
+		"tilemap.tileset.remove_tile": _handle_tilemap_tileset_remove_tile,
+		"tilemap.tileset.replace_tile": _handle_tilemap_tileset_replace_tile,
+		"tilemap.layer.set_tileset": _handle_tilemap_layer_set_tileset,
+		"tilemap.layer.set_params": _handle_tilemap_layer_set_params,
+		"tilemap.offset.set": _handle_tilemap_offset_set,
+		"tilemap.cell.get": _handle_tilemap_cell_get,
+		"tilemap.cell.set": _handle_tilemap_cell_set,
+		"tilemap.cell.clear": _handle_tilemap_cell_clear,
+		"tilemap.fill_rect": _handle_tilemap_fill_rect,
+		"tilemap.replace_index": _handle_tilemap_replace_index,
+		"tilemap.random_fill": _handle_tilemap_random_fill,
+		"effect.layer.list": _handle_effect_layer_list,
+		"effect.layer.add": _handle_effect_layer_add,
+		"effect.layer.remove": _handle_effect_layer_remove,
+		"effect.layer.move": _handle_effect_layer_move,
+		"effect.layer.set_enabled": _handle_effect_layer_set_enabled,
+		"effect.layer.set_params": _handle_effect_layer_set_params,
+		"effect.layer.apply": _handle_effect_layer_apply,
+		"effect.shader.apply": _handle_effect_shader_apply,
+		"effect.shader.list": _handle_effect_shader_list,
+		"effect.shader.inspect": _handle_effect_shader_inspect,
+		"effect.shader.schema": _handle_effect_shader_schema,
+		"history.undo": _handle_history_undo,
+		"history.redo": _handle_history_redo,
+		"brush.list": _handle_brush_list,
+		"brush.add": _handle_brush_add,
+		"brush.remove": _handle_brush_remove,
+		"brush.clear": _handle_brush_clear,
+		"brush.stamp": _handle_brush_stamp,
+		"brush.stroke": _handle_brush_stroke,
+		"three_d.object.list": _handle_three_d_object_list,
+		"three_d.object.add": _handle_three_d_object_add,
+		"three_d.object.remove": _handle_three_d_object_remove,
+		"three_d.object.update": _handle_three_d_object_update,
+	}
+
+
 func _dispatch_method(method: String, params: Dictionary, allow_batch: bool) -> Dictionary:
-	if method == "ping":
-		return {"message": "pong"}
-	if method == "version":
-		var version := ""
-		if _api and _api.general:
-			version = _api.general.get_pixelorama_version()
-		return {"pixelorama": version}
-	if method == "bridge.info":
-		var version := ""
-		if _api and _api.general:
-			version = _api.general.get_pixelorama_version()
-		return {
-			"pixelorama": version,
-			"extension_version": _get_extension_version(),
-			"protocol_version": BRIDGE_PROTOCOL_VERSION
-		}
-	if method == "batch.exec":
-		if not allow_batch:
-			return _err("invalid_method", "nested batch not allowed")
-		return _handle_batch_exec(params)
-	if method == "project.create":
-		return _handle_project_create(params)
-	if method == "project.open":
-		return _handle_project_open(params)
-	if method == "project.save":
-		return _handle_project_save(params)
-	if method == "project.export":
-		return _handle_project_export(params)
-	if method == "project.info":
-		return _handle_project_info()
-	if method == "project.set_active":
-		return _handle_project_set_active(params)
-	if method == "project.set_indexed_mode":
-		return _handle_project_set_indexed_mode(params)
-	if method == "project.import.sequence":
-		return _handle_project_import_sequence(params)
-	if method == "project.import.spritesheet":
-		return _handle_project_import_spritesheet(params)
-	if method == "project.export.animated":
-		return _handle_project_export_animated(params)
-	if method == "project.export.spritesheet":
-		return _handle_project_export_spritesheet(params)
-	if method == "layer.list":
-		return _handle_layer_list()
-	if method == "layer.add":
-		return _handle_layer_add(params)
-	if method == "layer.remove":
-		return _handle_layer_remove(params)
-	if method == "layer.rename":
-		return _handle_layer_rename(params)
-	if method == "layer.move":
-		return _handle_layer_move(params)
-	if method == "layer.get_props":
-		return _handle_layer_get_props(params)
-	if method == "layer.set_props":
-		return _handle_layer_set_props(params)
-	if method == "layer.group.create":
-		return _handle_layer_group_create(params)
-	if method == "layer.parent.set":
-		return _handle_layer_parent_set(params)
-	if method == "frame.list":
-		return _handle_frame_list()
-	if method == "frame.add":
-		return _handle_frame_add(params)
-	if method == "frame.remove":
-		return _handle_frame_remove(params)
-	if method == "frame.duplicate":
-		return _handle_frame_duplicate(params)
-	if method == "frame.move":
-		return _handle_frame_move(params)
-	if method == "pixel.get":
-		return _handle_pixel_get(params)
-	if method == "pixel.set":
-		return _handle_pixel_set(params)
-	if method == "pixel.set_many":
-		return _handle_pixel_set_many(params)
-	if method == "pixel.get_region":
-		return _handle_pixel_get_region(params)
-	if method == "pixel.set_region":
-		return _handle_pixel_set_region(params)
-	if method == "pixel.replace_color":
-		return _handle_pixel_replace_color(params)
-	if method == "canvas.fill":
-		return _handle_canvas_fill(params)
-	if method == "canvas.clear":
-		return _handle_canvas_clear(params)
-	if method == "canvas.resize":
-		return _handle_canvas_resize(params)
-	if method == "canvas.crop":
-		return _handle_canvas_crop(params)
-	if method == "canvas.snapshot":
-		return _handle_canvas_snapshot(params)
-	if method == "palette.list":
-		return _handle_palette_list()
-	if method == "palette.select":
-		return _handle_palette_select(params)
-	if method == "palette.create":
-		return _handle_palette_create(params)
-	if method == "palette.delete":
-		return _handle_palette_delete(params)
-	if method == "draw.line":
-		return _handle_draw_line(params)
-	if method == "draw.rect":
-		return _handle_draw_rect(params)
-	if method == "draw.ellipse":
-		return _handle_draw_ellipse(params)
-	if method == "draw.erase_line":
-		return _handle_draw_erase_line(params)
-	if method == "draw.text":
-		return _handle_draw_text(params)
-	if method == "draw.gradient":
-		return _handle_draw_gradient(params)
-	if method == "selection.clear":
-		return _handle_selection_clear()
-	if method == "selection.invert":
-		return _handle_selection_invert()
-	if method == "selection.rect":
-		return _handle_selection_rect(params)
-	if method == "selection.ellipse":
-		return _handle_selection_ellipse(params)
-	if method == "selection.lasso":
-		return _handle_selection_lasso(params)
-	if method == "selection.move":
-		return _handle_selection_move(params)
-	if method == "selection.export_mask":
-		return _handle_selection_export_mask(params)
-	if method == "symmetry.set":
-		return _handle_symmetry_set(params)
-	if method == "animation.tags.list":
-		return _handle_animation_tags_list()
-	if method == "animation.tags.add":
-		return _handle_animation_tags_add(params)
-	if method == "animation.tags.update":
-		return _handle_animation_tags_update(params)
-	if method == "animation.tags.remove":
-		return _handle_animation_tags_remove(params)
-	if method == "animation.playback.set":
-		return _handle_animation_playback_set(params)
-	if method == "animation.fps.get":
-		return _handle_animation_fps_get()
-	if method == "animation.fps.set":
-		return _handle_animation_fps_set(params)
-	if method == "animation.frame_duration.set":
-		return _handle_animation_frame_duration_set(params)
-	if method == "animation.loop.set":
-		return _handle_animation_loop_set(params)
-	if method == "tilemap.tileset.list":
-		return _handle_tilemap_tileset_list()
-	if method == "tilemap.tileset.create":
-		return _handle_tilemap_tileset_create(params)
-	if method == "tilemap.tileset.add_tile":
-		return _handle_tilemap_tileset_add_tile(params)
-	if method == "tilemap.tileset.remove_tile":
-		return _handle_tilemap_tileset_remove_tile(params)
-	if method == "tilemap.tileset.replace_tile":
-		return _handle_tilemap_tileset_replace_tile(params)
-	if method == "tilemap.layer.set_tileset":
-		return _handle_tilemap_layer_set_tileset(params)
-	if method == "tilemap.layer.set_params":
-		return _handle_tilemap_layer_set_params(params)
-	if method == "tilemap.offset.set":
-		return _handle_tilemap_offset_set(params)
-	if method == "tilemap.cell.get":
-		return _handle_tilemap_cell_get(params)
-	if method == "tilemap.cell.set":
-		return _handle_tilemap_cell_set(params)
-	if method == "tilemap.cell.clear":
-		return _handle_tilemap_cell_clear(params)
-	if method == "tilemap.fill_rect":
-		return _handle_tilemap_fill_rect(params)
-	if method == "tilemap.replace_index":
-		return _handle_tilemap_replace_index(params)
-	if method == "tilemap.random_fill":
-		return _handle_tilemap_random_fill(params)
-	if method == "effect.layer.list":
-		return _handle_effect_layer_list(params)
-	if method == "effect.layer.add":
-		return _handle_effect_layer_add(params)
-	if method == "effect.layer.remove":
-		return _handle_effect_layer_remove(params)
-	if method == "effect.layer.move":
-		return _handle_effect_layer_move(params)
-	if method == "effect.layer.set_enabled":
-		return _handle_effect_layer_set_enabled(params)
-	if method == "effect.layer.set_params":
-		return _handle_effect_layer_set_params(params)
-	if method == "effect.layer.apply":
-		return _handle_effect_layer_apply(params)
-	if method == "effect.shader.apply":
-		return _handle_effect_shader_apply(params)
-	if method == "effect.shader.list":
-		return _handle_effect_shader_list()
-	if method == "effect.shader.inspect":
-		return _handle_effect_shader_inspect(params)
-	if method == "effect.shader.schema":
-		return _handle_effect_shader_schema(params)
-	if method == "history.undo":
-		return _handle_history_undo()
-	if method == "history.redo":
-		return _handle_history_redo()
-	if method == "brush.list":
-		return _handle_brush_list()
-	if method == "brush.add":
-		return _handle_brush_add(params)
-	if method == "brush.remove":
-		return _handle_brush_remove(params)
-	if method == "brush.clear":
-		return _handle_brush_clear()
-	if method == "brush.stamp":
-		return _handle_brush_stamp(params)
-	if method == "brush.stroke":
-		return _handle_brush_stroke(params)
-	if method == "palette.import":
-		return _handle_palette_import(params)
-	if method == "palette.export":
-		return _handle_palette_export(params)
-	if method == "three_d.object.list":
-		return _handle_three_d_object_list(params)
-	if method == "three_d.object.add":
-		return _handle_three_d_object_add(params)
-	if method == "three_d.object.remove":
-		return _handle_three_d_object_remove(params)
-	if method == "three_d.object.update":
-		return _handle_three_d_object_update(params)
-	return _err("invalid_method", "unknown method")
+	if method == "batch.exec" and not allow_batch:
+		return _err("invalid_method", "nested batch not allowed")
+	var handler = _dispatch_table.get(method)
+	if handler == null:
+		return _err("invalid_method", "unknown method")
+	return handler.call(params)
+
+
+func _handle_version(_params: Dictionary) -> Dictionary:
+	var version := ""
+	if _api and _api.general:
+		version = _api.general.get_pixelorama_version()
+	return {"pixelorama": version}
+
+
+func _handle_bridge_info(_params: Dictionary) -> Dictionary:
+	var version := ""
+	if _api and _api.general:
+		version = _api.general.get_pixelorama_version()
+	return {
+		"pixelorama": version,
+		"extension_version": _get_extension_version(),
+		"protocol_version": BRIDGE_PROTOCOL_VERSION
+	}
 
 
 func _handle_project_create(params: Dictionary) -> Dictionary:
 	var name := str(params.get("name", "untitled"))
 	var width := int(params.get("width", 64))
 	var height := int(params.get("height", 64))
-	var fill := _parse_color(params.get("fill_color", null))
+	var fill := Parsers.parse_color(params.get("fill_color", null))
 	if not _api or not _api.project:
 		return {"_error": {"code": "extensions_api_unavailable", "message": "ExtensionsApi missing"}}
 	var frames: Array[Frame] = []
@@ -417,8 +335,9 @@ func _handle_project_export(params: Dictionary) -> Dictionary:
 		frame = int(params.get("frame"))
 		frame = clampi(frame, 0, project.frames.size() - 1)
 	var trim := bool(params.get("trim", false))
-	var scale := int(params.get("scale", 100))
-	var interpolation := _parse_interpolation(params.get("interpolation", "nearest"))
+	var _raw_scale := int(params.get("scale", 1))
+	var scale := _raw_scale * 100 if _raw_scale < 100 else _raw_scale
+	var interpolation := Parsers.parse_interpolation(params.get("interpolation", "nearest"))
 	var split_layers := bool(params.get("split_layers", false))
 	var layer_index := int(params.get("layer", -1))
 	if split_layers:
@@ -437,7 +356,7 @@ func _handle_project_export(params: Dictionary) -> Dictionary:
 					int(round(image.get_height() * scale / 100.0)),
 					interpolation
 				)
-			var layer_path := _export_layer_path(path, layer.name, i)
+			var layer_path := ExportUtils.export_layer_path(path, layer.name, i)
 			var err_layer := image.save_png(layer_path)
 			if err_layer != OK:
 				return _err("export_failed", error_string(err_layer))
@@ -486,57 +405,85 @@ func _handle_project_export_animated(params: Dictionary) -> Dictionary:
 	if path.is_empty():
 		return _err("path_required", "path is required")
 	var format := str(params.get("format", "gif")).to_lower()
+	if format != "gif" and format != "apng":
+		return _err("invalid_format", "format must be gif or apng")
 	var project: Project = Global.current_project
-	Export.current_tab = Export.ExportTab.IMAGE
-	Export.split_layers = bool(params.get("split_layers", false))
-	Export.erase_unselected_area = bool(params.get("erase_unselected_area", false))
-	Export.trim_images = bool(params.get("trim", false))
-	Export.direction = Export.AnimationDirection.FORWARD
-	Export.resize = int(params.get("scale", 100))
-	Export.interpolation = _parse_interpolation(params.get("interpolation", "nearest"))
+	var trim := bool(params.get("trim", false))
+	var _scale := int(params.get("scale", 1))
+	var scale_pct := _scale * 100 if _scale < 100 else _scale
+	var interp := Parsers.parse_interpolation(params.get("interpolation", "nearest"))
+	var erase_unselected := bool(params.get("erase_unselected_area", false))
+	var direction := Export.AnimationDirection.FORWARD
 	if params.has("direction"):
-		Export.direction = _parse_animation_direction(params.get("direction", "forward"))
-	Export.frame_current_tag = Export.ExportFrames.ALL_FRAMES
+		direction = Parsers.parse_animation_direction(params.get("direction", "forward"))
+	# Build frame list from tags
+	var frames: Array[Frame] = []
 	if params.has("tag"):
 		var tag_name := str(params.get("tag", ""))
 		if not tag_name.is_empty():
-			for i in project.animation_tags.size():
-				if project.animation_tags[i].name == tag_name:
-					Export.frame_current_tag = Export.ExportFrames.size() + i
+			for tag in project.animation_tags:
+				if tag.name == tag_name:
+					frames = project.frames.slice(tag.from - 1, tag.to)
 					break
-	if params.has("tag_index"):
-		var tag_index := int(params.get("tag_index", -1))
-		if tag_index >= 0 and tag_index < project.animation_tags.size():
-			Export.frame_current_tag = Export.ExportFrames.size() + tag_index
-	Export.cache_blended_frames(project)
-	Export.process_animation(project)
-	Export._scale_processed_images()
-	var frames: Array = []
-	for item in Export.processed_images:
-		var p: Export.ProcessedImage = item
-		var img := p.image
-		img.convert(Image.FORMAT_RGBA8)
-		var frame := AImgIOFrame.new()
-		frame.content = img
-		frame.duration = p.duration
-		frames.append(frame)
+	elif params.has("tag_index"):
+		var ti := int(params.get("tag_index", -1))
+		if ti >= 0 and ti < project.animation_tags.size():
+			var tag := project.animation_tags[ti]
+			frames = project.frames.slice(tag.from - 1, tag.to)
+	if frames.is_empty():
+		frames = project.frames.duplicate()
+	# Apply direction
+	if direction == Export.AnimationDirection.BACKWARDS:
+		frames.reverse()
+	elif direction == Export.AnimationDirection.PING_PONG:
+		var inv := frames.duplicate()
+		inv.reverse()
+		if inv.size() > 0:
+			inv.remove_at(0)
+		if inv.size() > 0:
+			inv.remove_at(inv.size() - 1)
+		frames.append_array(inv)
 	if frames.is_empty():
 		return _err("export_failed", "no frames to export")
-	if format == "gif":
-		var data := _export_gif_frames(frames)
-		var file := FileAccess.open(path, FileAccess.WRITE)
-		if file == null:
-			return _err("export_failed", "unable to open file")
-		file.store_buffer(data)
-		return {"path": path, "format": "gif", "frames": frames.size()}
-	if format == "apng":
-		var data := _export_apng_frames(frames, project.fps)
-		var file := FileAccess.open(path, FileAccess.WRITE)
-		if file == null:
-			return _err("export_failed", "unable to open file")
-		file.store_buffer(data)
-		return {"path": path, "format": "apng", "frames": frames.size()}
-	return _err("invalid_format", "format must be gif or apng")
+	# Blend each frame with DrawingAlgos and save as temp PNG.
+	# Encoding to GIF/APNG is done server-side by PIL (fast C encoder)
+	# instead of pure-GDScript encoders which block the main thread.
+	var temp_dir := OS.get_temp_dir().path_join("pxo_anim_%d" % Time.get_ticks_msec())
+	DirAccess.make_dir_recursive_absolute(temp_dir)
+	var frame_data: Array = []
+	for i in frames.size():
+		var frame: Frame = frames[i]
+		var image := project.new_empty_image()
+		DrawingAlgos.blend_layers(image, frame, Vector2i.ZERO, project)
+		if erase_unselected and project.has_selection:
+			var crop := project.new_empty_image()
+			var sel := project.selection_map.return_cropped_copy(project, project.size)
+			crop.blit_rect_mask(image, sel, Rect2i(Vector2i.ZERO, image.get_size()), Vector2i.ZERO)
+			image = crop
+		if trim:
+			image = image.get_region(image.get_used_rect())
+		if scale_pct != 100:
+			image.resize(
+				int(round(image.get_width() * scale_pct / 100.0)),
+				int(round(image.get_height() * scale_pct / 100.0)),
+				interp
+			)
+		image.convert(Image.FORMAT_RGBA8)
+		var fname := "%04d.png" % i
+		var fpath := temp_dir.path_join(fname)
+		image.save_png(fpath)
+		var duration := frame.get_duration_in_seconds(project.fps)
+		frame_data.append({"path": fpath, "duration": duration})
+	return {
+		"temp_dir": temp_dir,
+		"frames": frame_data,
+		"format": format,
+		"final_path": path,
+		"width": project.size.x,
+		"height": project.size.y,
+		"fps": project.fps,
+		"frame_count": frame_data.size()
+	}
 
 
 func _handle_project_export_spritesheet(params: Dictionary) -> Dictionary:
@@ -550,11 +497,12 @@ func _handle_project_export_spritesheet(params: Dictionary) -> Dictionary:
 	Export.split_layers = false
 	Export.erase_unselected_area = false
 	Export.trim_images = bool(params.get("trim", false))
-	Export.orientation = _parse_spritesheet_orientation(params.get("orientation", "rows"))
+	Export.orientation = Parsers.parse_spritesheet_orientation(params.get("orientation", "rows"))
 	Export.lines_count = int(params.get("lines", 1))
 	Export.frame_current_tag = Export.ExportFrames.ALL_FRAMES
-	Export.resize = int(params.get("scale", 100))
-	Export.interpolation = _parse_interpolation(params.get("interpolation", "nearest"))
+	var _scale := int(params.get("scale", 1))
+	Export.resize = _scale * 100 if _scale < 100 else _scale
+	Export.interpolation = Parsers.parse_interpolation(params.get("interpolation", "nearest"))
 	if params.has("tag"):
 		var tag_name := str(params.get("tag", ""))
 		if not tag_name.is_empty():
@@ -593,7 +541,7 @@ func _project_info(project: Project) -> Dictionary:
 	}
 
 
-func _handle_project_info() -> Dictionary:
+func _handle_project_info(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	return _project_info(Global.current_project)
@@ -626,7 +574,7 @@ func _handle_project_set_indexed_mode(params: Dictionary) -> Dictionary:
 	return {"indexed": enabled}
 
 
-func _handle_layer_list() -> Dictionary:
+func _handle_layer_list(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	var project := Global.current_project
@@ -651,7 +599,7 @@ func _handle_layer_add(params: Dictionary) -> Dictionary:
 	above = clampi(above, 0, project.layers.size() - 1)
 	var name := str(params.get("name", ""))
 	var type_val = params.get("type", "pixel")
-	var layer_type := _parse_layer_type(type_val)
+	var layer_type := Parsers.parse_layer_type(type_val)
 	if layer_type < 0:
 		return _err("invalid_type", "unknown layer type")
 	if layer_type == Global.LayerTypes.TILEMAP:
@@ -684,7 +632,7 @@ func _handle_layer_add(params: Dictionary) -> Dictionary:
 			if new_index >= 0 and new_index < project.layers.size():
 				project.layers[new_index].name = name
 		_sync_layer_indices(project)
-	return _handle_layer_list()
+	return _handle_layer_list({})
 
 
 func _handle_layer_remove(params: Dictionary) -> Dictionary:
@@ -699,7 +647,7 @@ func _handle_layer_remove(params: Dictionary) -> Dictionary:
 	project.remove_layers(PackedInt32Array([index]))
 	_sync_layer_indices(project)
 	project.change_cel(project.current_frame, clampi(project.current_layer, 0, project.layers.size() - 1))
-	return _handle_layer_list()
+	return _handle_layer_list({})
 
 
 func _handle_layer_rename(params: Dictionary) -> Dictionary:
@@ -713,7 +661,7 @@ func _handle_layer_rename(params: Dictionary) -> Dictionary:
 	if name.is_empty():
 		return _err("invalid_name", "name required")
 	project.layers[index].name = name
-	return _handle_layer_list()
+	return _handle_layer_list({})
 
 
 func _handle_layer_move(params: Dictionary) -> Dictionary:
@@ -729,7 +677,7 @@ func _handle_layer_move(params: Dictionary) -> Dictionary:
 	var layer := project.layers[from_idx]
 	project.move_layers(PackedInt32Array([from_idx]), PackedInt32Array([to_idx]), [layer.parent])
 	_sync_layer_indices(project)
-	return _handle_layer_list()
+	return _handle_layer_list({})
 
 
 func _handle_layer_get_props(params: Dictionary) -> Dictionary:
@@ -773,7 +721,7 @@ func _handle_layer_set_props(params: Dictionary) -> Dictionary:
 	if params.has("opacity"):
 		layer.opacity = clampf(float(params.get("opacity", layer.opacity)), 0.0, 1.0)
 	if params.has("blend_mode"):
-		var mode := _parse_blend_mode(params.get("blend_mode"))
+		var mode := Parsers.parse_blend_mode(params.get("blend_mode"))
 		if mode >= -2:
 			layer.blend_mode = mode
 	if params.has("clipping_mask"):
@@ -795,7 +743,7 @@ func _handle_layer_group_create(params: Dictionary) -> Dictionary:
 	var insert_index := clampi(above + 1, 0, project.layers.size())
 	project.add_layers([group], PackedInt32Array([insert_index]), [cels])
 	_sync_layer_indices(project)
-	return _handle_layer_list()
+	return _handle_layer_list({})
 
 
 func _handle_layer_parent_set(params: Dictionary) -> Dictionary:
@@ -822,7 +770,7 @@ func _handle_layer_parent_set(params: Dictionary) -> Dictionary:
 	return _handle_layer_get_props({"index": index})
 
 
-func _handle_frame_list() -> Dictionary:
+func _handle_frame_list(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	var project := Global.current_project
@@ -841,7 +789,7 @@ func _handle_frame_add(params: Dictionary) -> Dictionary:
 	after = clampi(after, 0, project.frames.size() - 1)
 	var frame := project.new_empty_frame()
 	project.add_frames([frame], PackedInt32Array([after + 1]))
-	return _handle_frame_list()
+	return _handle_frame_list({})
 
 
 func _handle_frame_remove(params: Dictionary) -> Dictionary:
@@ -855,7 +803,7 @@ func _handle_frame_remove(params: Dictionary) -> Dictionary:
 		return _err("invalid_index", "frame index out of range")
 	project.remove_frames(PackedInt32Array([index]))
 	project.change_cel(clampi(project.current_frame, 0, project.frames.size() - 1), project.current_layer)
-	return _handle_frame_list()
+	return _handle_frame_list({})
 
 
 func _handle_frame_duplicate(params: Dictionary) -> Dictionary:
@@ -874,7 +822,7 @@ func _handle_frame_duplicate(params: Dictionary) -> Dictionary:
 		new_cels.append(dup)
 	var frame := Frame.new(new_cels, src.duration)
 	project.add_frames([frame], PackedInt32Array([index + 1]))
-	return _handle_frame_list()
+	return _handle_frame_list({})
 
 
 func _handle_frame_move(params: Dictionary) -> Dictionary:
@@ -888,7 +836,7 @@ func _handle_frame_move(params: Dictionary) -> Dictionary:
 	if to_idx < 0 or to_idx >= project.frames.size():
 		return _err("invalid_index", "to out of range")
 	project.move_frames(PackedInt32Array([from_idx]), PackedInt32Array([to_idx]))
-	return _handle_frame_list()
+	return _handle_frame_list({})
 
 
 func _handle_pixel_get(params: Dictionary) -> Dictionary:
@@ -905,7 +853,7 @@ func _handle_pixel_get(params: Dictionary) -> Dictionary:
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
 	var color := cel.image.get_pixel(x, y)
-	return {"color": _color_to_array(color)}
+	return {"color": Drawing.color_to_array(color)}
 
 
 func _handle_pixel_set(params: Dictionary) -> Dictionary:
@@ -921,7 +869,7 @@ func _handle_pixel_set(params: Dictionary) -> Dictionary:
 	var cel := _get_pixel_cel(frame, layer)
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
-	var color := _parse_color(params.get("color", null))
+	var color := Parsers.parse_color(params.get("color", null))
 	cel.image.set_pixel(x, y, color)
 	cel.update_texture()
 	return {"ok": true}
@@ -936,7 +884,7 @@ func _handle_canvas_fill(params: Dictionary) -> Dictionary:
 	var cel := _get_pixel_cel(frame, layer)
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
-	var color := _parse_color(params.get("color", null))
+	var color := Parsers.parse_color(params.get("color", null))
 	cel.image.fill(color)
 	cel.update_texture()
 	return {"ok": true}
@@ -1007,7 +955,7 @@ func _handle_canvas_snapshot(params: Dictionary) -> Dictionary:
 	}
 
 
-func _handle_palette_list() -> Dictionary:
+func _handle_palette_list(_params: Dictionary) -> Dictionary:
 	var items := []
 	for name in Palettes.palettes.keys():
 		items.append({"name": name, "scope": "global"})
@@ -1081,9 +1029,9 @@ func _handle_draw_line(params: Dictionary) -> Dictionary:
 	var cel := _get_pixel_cel(frame, layer)
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
-	var color := _parse_color(params.get("color", null))
+	var color := Parsers.parse_color(params.get("color", null))
 	var points := Geometry2D.bresenham_line(Vector2i(x1, y1), Vector2i(x2, y2))
-	_draw_points(cel.image, points, color, thickness)
+	Drawing.draw_points(cel.image, points, color, thickness)
 	cel.update_texture()
 	return {"ok": true}
 
@@ -1112,7 +1060,7 @@ func _handle_draw_text(params: Dictionary) -> Dictionary:
 	var size := int(params.get("size", 16))
 	var align := str(params.get("align", "left")).to_lower()
 	var antialias := bool(params.get("antialias", false))
-	var color := _parse_color(params.get("color", null))
+	var color := Parsers.parse_color(params.get("color", null))
 	var font := FontVariation.new()
 	font.base_font = Global.find_font_from_name(font_name)
 	if not is_instance_valid(font.base_font):
@@ -1175,8 +1123,8 @@ func _handle_draw_gradient(params: Dictionary) -> Dictionary:
 	var cel := _get_pixel_cel(frame, layer)
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
-	var from_color := _parse_color(params.get("from", null))
-	var to_color := _parse_color(params.get("to", null))
+	var from_color := Parsers.parse_color(params.get("from", null))
+	var to_color := Parsers.parse_color(params.get("to", null))
 	var direction := str(params.get("direction", "horizontal")).to_lower()
 	for yy in range(y, y + height):
 		for xx in range(x, x + width):
@@ -1212,7 +1160,7 @@ func _handle_draw_rect(params: Dictionary) -> Dictionary:
 	var cel := _get_pixel_cel(frame, layer)
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
-	var color := _parse_color(params.get("color", null))
+	var color := Parsers.parse_color(params.get("color", null))
 	if width <= 0 or height <= 0:
 		return _err("invalid_size", "width/height must be > 0")
 	var rect := Rect2i(x, y, width, height)
@@ -1220,10 +1168,10 @@ func _handle_draw_rect(params: Dictionary) -> Dictionary:
 		cel.image.fill_rect(rect, color)
 	else:
 		for i in range(thickness):
-			_draw_line_on_image(cel.image, Vector2i(rect.position.x, rect.position.y + i), Vector2i(rect.position.x + rect.size.x - 1, rect.position.y + i), color, 1)
-			_draw_line_on_image(cel.image, Vector2i(rect.position.x, rect.position.y + rect.size.y - 1 - i), Vector2i(rect.position.x + rect.size.x - 1, rect.position.y + rect.size.y - 1 - i), color, 1)
-			_draw_line_on_image(cel.image, Vector2i(rect.position.x + i, rect.position.y), Vector2i(rect.position.x + i, rect.position.y + rect.size.y - 1), color, 1)
-			_draw_line_on_image(cel.image, Vector2i(rect.position.x + rect.size.x - 1 - i, rect.position.y), Vector2i(rect.position.x + rect.size.x - 1 - i, rect.position.y + rect.size.y - 1), color, 1)
+			Drawing.draw_line_on_image(cel.image, Vector2i(rect.position.x, rect.position.y + i), Vector2i(rect.position.x + rect.size.x - 1, rect.position.y + i), color, 1)
+			Drawing.draw_line_on_image(cel.image, Vector2i(rect.position.x, rect.position.y + rect.size.y - 1 - i), Vector2i(rect.position.x + rect.size.x - 1, rect.position.y + rect.size.y - 1 - i), color, 1)
+			Drawing.draw_line_on_image(cel.image, Vector2i(rect.position.x + i, rect.position.y), Vector2i(rect.position.x + i, rect.position.y + rect.size.y - 1), color, 1)
+			Drawing.draw_line_on_image(cel.image, Vector2i(rect.position.x + rect.size.x - 1 - i, rect.position.y), Vector2i(rect.position.x + rect.size.x - 1 - i, rect.position.y + rect.size.y - 1), color, 1)
 	cel.update_texture()
 	return {"ok": true}
 
@@ -1245,7 +1193,7 @@ func _handle_draw_ellipse(params: Dictionary) -> Dictionary:
 		return _err("invalid_cel", "not a PixelCel")
 	if width <= 0 or height <= 0:
 		return _err("invalid_size", "width/height must be > 0")
-	var color := _parse_color(params.get("color", null))
+	var color := Parsers.parse_color(params.get("color", null))
 	var pos := Vector2i(x, y)
 	var size := Vector2i(width, height)
 	var points: Array[Vector2i] = []
@@ -1253,7 +1201,7 @@ func _handle_draw_ellipse(params: Dictionary) -> Dictionary:
 		points = DrawingAlgos.get_ellipse_points_filled(pos, size, max(1, thickness))
 	else:
 		points = DrawingAlgos.get_ellipse_points(pos, size)
-	_draw_points(cel.image, points, color, 1)
+	Drawing.draw_points(cel.image, points, color, 1)
 	cel.update_texture()
 	return {"ok": true}
 
@@ -1267,20 +1215,20 @@ func _handle_pixel_replace_color(params: Dictionary) -> Dictionary:
 	var cel := _get_pixel_cel(frame, layer)
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
-	var from_color := _parse_color(params.get("from", null))
-	var to_color := _parse_color(params.get("to", null))
+	var from_color := Parsers.parse_color(params.get("from", null))
+	var to_color := Parsers.parse_color(params.get("to", null))
 	var tolerance := float(params.get("tolerance", 0.0))
 	var img := cel.image
 	for y in img.get_height():
 		for x in img.get_width():
 			var c := img.get_pixel(x, y)
-			if _color_close(c, from_color, tolerance):
+			if Drawing.color_close(c, from_color, tolerance):
 				img.set_pixel(x, y, to_color)
 	cel.update_texture()
 	return {"ok": true}
 
 
-func _handle_selection_clear() -> Dictionary:
+func _handle_selection_clear(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	var project: Project = Global.current_project
@@ -1290,7 +1238,7 @@ func _handle_selection_clear() -> Dictionary:
 	return {"ok": true}
 
 
-func _handle_selection_invert() -> Dictionary:
+func _handle_selection_invert(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	var project: Project = Global.current_project
@@ -1565,7 +1513,7 @@ func _handle_pixel_set_many(params: Dictionary) -> Dictionary:
 	var cel := _get_pixel_cel(frame, layer)
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
-	var default_color := _parse_color(params.get("color", null))
+	var default_color := Parsers.parse_color(params.get("color", null))
 	var points: Array = points_raw
 	var count := 0
 	for item in points:
@@ -1578,7 +1526,7 @@ func _handle_pixel_set_many(params: Dictionary) -> Dictionary:
 			continue
 		var color := default_color
 		if p.has("color"):
-			color = _parse_color(p.get("color", null))
+			color = Parsers.parse_color(p.get("color", null))
 		cel.image.set_pixel(x, y, color)
 		count += 1
 	cel.update_texture()
@@ -1665,7 +1613,7 @@ func _handle_pixel_set_region(params: Dictionary) -> Dictionary:
 	return {"ok": true, "width": image.get_width(), "height": image.get_height()}
 
 
-func _handle_animation_tags_list() -> Dictionary:
+func _handle_animation_tags_list(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	var project: Project = Global.current_project
@@ -1676,7 +1624,7 @@ func _handle_animation_tags_list() -> Dictionary:
 			{
 				"index": i,
 				"name": tag.name,
-				"color": _color_to_array(tag.color),
+				"color": Drawing.color_to_array(tag.color),
 				"from": tag.from,
 				"to": tag.to,
 				"user_data": tag.user_data
@@ -1700,7 +1648,7 @@ func _handle_animation_tags_add(params: Dictionary) -> Dictionary:
 		var tmp := to_frame
 		to_frame = from_frame
 		from_frame = tmp
-	var color := _parse_color(params.get("color", null))
+	var color := Parsers.parse_color(params.get("color", null))
 	var user_data := str(params.get("user_data", ""))
 	var new_tags: Array[AnimationTag] = []
 	for t in project.animation_tags:
@@ -1708,7 +1656,7 @@ func _handle_animation_tags_add(params: Dictionary) -> Dictionary:
 	new_tags.append(AnimationTag.new(name, color, from_frame, to_frame))
 	new_tags[-1].user_data = user_data
 	project.animation_tags = new_tags
-	return _handle_animation_tags_list()
+	return _handle_animation_tags_list({})
 
 
 func _handle_animation_tags_update(params: Dictionary) -> Dictionary:
@@ -1732,7 +1680,7 @@ func _handle_animation_tags_update(params: Dictionary) -> Dictionary:
 	if params.has("new_name"):
 		tag.name = str(params.get("new_name", tag.name))
 	if params.has("color"):
-		tag.color = _parse_color(params.get("color", null))
+		tag.color = Parsers.parse_color(params.get("color", null))
 	if params.has("from"):
 		tag.from = clampi(int(params.get("from", tag.from)), 1, project.frames.size())
 	if params.has("to"):
@@ -1744,7 +1692,7 @@ func _handle_animation_tags_update(params: Dictionary) -> Dictionary:
 	if params.has("user_data"):
 		tag.user_data = str(params.get("user_data", tag.user_data))
 	project.animation_tags = new_tags
-	return _handle_animation_tags_list()
+	return _handle_animation_tags_list({})
 
 
 func _handle_animation_tags_remove(params: Dictionary) -> Dictionary:
@@ -1766,7 +1714,7 @@ func _handle_animation_tags_remove(params: Dictionary) -> Dictionary:
 		new_tags.append(t.duplicate())
 	new_tags.remove_at(target_idx)
 	project.animation_tags = new_tags
-	return _handle_animation_tags_list()
+	return _handle_animation_tags_list({})
 
 
 func _handle_animation_playback_set(params: Dictionary) -> Dictionary:
@@ -1784,7 +1732,7 @@ func _handle_animation_playback_set(params: Dictionary) -> Dictionary:
 	return {"play_only_tags": Global.play_only_tags}
 
 
-func _handle_animation_fps_get() -> Dictionary:
+func _handle_animation_fps_get(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	return {"fps": Global.current_project.fps}
@@ -1832,7 +1780,7 @@ func _handle_animation_loop_set(params: Dictionary) -> Dictionary:
 	return {"mode": mode}
 
 
-func _handle_tilemap_tileset_list() -> Dictionary:
+func _handle_tilemap_tileset_list(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	var project: Project = Global.current_project
@@ -1864,13 +1812,13 @@ func _handle_tilemap_tileset_create(params: Dictionary) -> Dictionary:
 	if tile_size.x <= 0 or tile_size.y <= 0:
 		return _err("invalid_size", "tile_size must be > 0")
 	var name := str(params.get("name", ""))
-	var tile_shape := _parse_tile_shape(params.get("tile_shape", null))
+	var tile_shape := Parsers.parse_tile_shape(params.get("tile_shape", null))
 	if tile_shape < 0:
 		tile_shape = TileSet.TILE_SHAPE_SQUARE
 	var add_empty := bool(params.get("add_empty_tile", true))
 	var tileset := TileSetCustom.new(tile_size, name, tile_shape, add_empty)
 	Global.current_project.add_tileset(tileset)
-	return _handle_tilemap_tileset_list()
+	return _handle_tilemap_tileset_list({})
 
 
 func _handle_tilemap_tileset_add_tile(params: Dictionary) -> Dictionary:
@@ -1918,7 +1866,7 @@ func _handle_tilemap_tileset_remove_tile(params: Dictionary) -> Dictionary:
 		var frame_idx := int(params.get("frame", project.current_frame))
 		cel = _get_tilemap_cel(frame_idx, layer_idx)
 	project.tilesets[tileset_index].remove_tile_at_index(tile_index, cel)
-	return _handle_tilemap_tileset_list()
+	return _handle_tilemap_tileset_list({})
 
 
 func _handle_tilemap_tileset_replace_tile(params: Dictionary) -> Dictionary:
@@ -1995,15 +1943,15 @@ func _handle_tilemap_layer_set_params(params: Dictionary) -> Dictionary:
 			if size_arr.size() >= 2:
 				tilemap.tile_size = Vector2i(int(size_arr[0]), int(size_arr[1]))
 	if params.has("tile_shape"):
-		var shape := _parse_tile_shape(params.get("tile_shape", null))
+		var shape := Parsers.parse_tile_shape(params.get("tile_shape", null))
 		if shape >= 0:
 			tilemap.tile_shape = shape
 	if params.has("tile_layout"):
-		var layout := _parse_tile_layout(params.get("tile_layout", null))
+		var layout := Parsers.parse_tile_layout(params.get("tile_layout", null))
 		if layout >= 0:
 			tilemap.tile_layout = layout
 	if params.has("tile_offset_axis"):
-		var axis := _parse_tile_offset_axis(params.get("tile_offset_axis", null))
+		var axis := Parsers.parse_tile_offset_axis(params.get("tile_offset_axis", null))
 		if axis >= 0:
 			tilemap.tile_offset_axis = axis
 	for f in project.frames.size():
@@ -2143,7 +2091,7 @@ func _handle_tilemap_random_fill(params: Dictionary) -> Dictionary:
 		return _err("invalid_cel", "not a CelTileMap")
 	for yy in range(cell_y, cell_y + height):
 		for xx in range(cell_x, cell_x + width):
-			var idx := _pick_weighted_index(indices, weights)
+			var idx := Drawing.pick_weighted_index(indices, weights)
 			var cell := cel.get_cell_at(Vector2i(xx, yy))
 			cel.set_index(cell, idx, false, false, false)
 	return {"ok": true}
@@ -2195,7 +2143,7 @@ func _handle_effect_layer_add(params: Dictionary) -> Dictionary:
 	if params.has("params") and typeof(params.get("params")) == TYPE_DICTIONARY:
 		var incoming: Dictionary = params.get("params")
 		if validate:
-			var normalized := _normalize_shader_params(shader_res, incoming, true)
+			var normalized := Shaders.normalize_shader_params(shader_res, incoming, true)
 			if normalized.has("_error"):
 				return normalized
 			effect.params = normalized.get("params", incoming)
@@ -2273,7 +2221,7 @@ func _handle_effect_layer_set_params(params: Dictionary) -> Dictionary:
 		var validate := bool(params.get("validate", true))
 		var incoming: Dictionary = params.get("params")
 		if validate and is_instance_valid(effect.shader):
-			var normalized := _normalize_shader_params(effect.shader, incoming, true)
+			var normalized := Shaders.normalize_shader_params(effect.shader, incoming, true)
 			if normalized.has("_error"):
 				return normalized
 			incoming = normalized.get("params", incoming)
@@ -2334,7 +2282,7 @@ func _handle_effect_shader_apply(params: Dictionary) -> Dictionary:
 		params_dict = params.get("params")
 	var validate := bool(params.get("validate", true))
 	if params_dict.size() > 0 and validate:
-		var normalized := _normalize_shader_params(shader_res, params_dict, true)
+		var normalized := Shaders.normalize_shader_params(shader_res, params_dict, true)
 		if normalized.has("_error"):
 			return normalized
 		params_dict = normalized.get("params", params_dict)
@@ -2346,7 +2294,7 @@ func _handle_effect_shader_apply(params: Dictionary) -> Dictionary:
 	return {"ok": true}
 
 
-func _handle_effect_shader_list() -> Dictionary:
+func _handle_effect_shader_list(_params: Dictionary) -> Dictionary:
 	var dir := DirAccess.open("res://src/Shaders/Effects")
 	if dir == null:
 		return _err("not_found", "effects directory not found")
@@ -2371,7 +2319,7 @@ func _handle_effect_shader_inspect(params: Dictionary) -> Dictionary:
 	var shader := load(path)
 	if not is_instance_valid(shader) or shader is not Shader:
 		return _err("invalid_shader", "shader not found")
-	var uniforms: Array = _parse_shader_uniforms(shader)
+	var uniforms: Array = Shaders.parse_shader_uniforms(shader)
 	return {"shader_path": path, "uniforms": uniforms}
 
 
@@ -2382,25 +2330,25 @@ func _handle_effect_shader_schema(params: Dictionary) -> Dictionary:
 	var shader := load(path)
 	if not is_instance_valid(shader) or shader is not Shader:
 		return _err("invalid_shader", "shader not found")
-	var schema: Array = _shader_uniform_schema(shader)
+	var schema: Array = Shaders.shader_uniform_schema(shader)
 	return {"shader_path": path, "schema": schema}
 
 
-func _handle_history_undo() -> Dictionary:
+func _handle_history_undo(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	Global.undo_or_redo(true)
 	return {"ok": true}
 
 
-func _handle_history_redo() -> Dictionary:
+func _handle_history_redo(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	Global.undo_or_redo(false)
 	return {"ok": true}
 
 
-func _handle_brush_list() -> Dictionary:
+func _handle_brush_list(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	var project: Project = Global.current_project
@@ -2432,7 +2380,7 @@ func _handle_brush_add(params: Dictionary) -> Dictionary:
 	image.convert(Image.FORMAT_RGBA8)
 	project.brushes.append(image)
 	Brushes.add_project_brush(image)
-	return _handle_brush_list()
+	return _handle_brush_list({})
 
 
 func _handle_brush_remove(params: Dictionary) -> Dictionary:
@@ -2446,10 +2394,10 @@ func _handle_brush_remove(params: Dictionary) -> Dictionary:
 	Brushes.clear_project_brush()
 	for b in project.brushes:
 		Brushes.add_project_brush(b)
-	return _handle_brush_list()
+	return _handle_brush_list({})
 
 
-func _handle_brush_clear() -> Dictionary:
+func _handle_brush_clear(_params: Dictionary) -> Dictionary:
 	if not _require_project():
 		return _err("no_project", "no current project")
 	var project: Project = Global.current_project
@@ -2469,15 +2417,15 @@ func _handle_brush_stamp(params: Dictionary) -> Dictionary:
 	var cel := _get_pixel_cel(frame, layer)
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
-	var brush := _build_brush_image(params)
+	var brush := BrushHelpers.build_brush_image(params)
 	if brush == null:
 		return _err("invalid_brush", "brush not found")
-	var color := _parse_color(params.get("color", null))
+	var color := Parsers.parse_color(params.get("color", null))
 	var opacity := float(params.get("opacity", 1.0))
 	var jitter := float(params.get("jitter", 0.0))
 	var spray := int(params.get("spray", 0))
 	var spray_radius := float(params.get("spray_radius", 0.0))
-	_apply_brush_with_variation(
+	BrushHelpers.apply_brush_with_variation(
 		cel.image,
 		brush,
 		Vector2i(x, y),
@@ -2507,18 +2455,18 @@ func _handle_brush_stroke(params: Dictionary) -> Dictionary:
 	var cel := _get_pixel_cel(frame, layer)
 	if cel == null:
 		return _err("invalid_cel", "not a PixelCel")
-	var brush := _build_brush_image(params)
+	var brush := BrushHelpers.build_brush_image(params)
 	if brush == null:
 		return _err("invalid_brush", "brush not found")
-	var color := _parse_color(params.get("color", null))
+	var color := Parsers.parse_color(params.get("color", null))
 	var opacity := float(params.get("opacity", 1.0))
 	var spacing := float(params.get("spacing", 1.0))
 	var mode := str(params.get("mode", "paint"))
 	var jitter := float(params.get("jitter", 0.0))
 	var spray := int(params.get("spray", 0))
 	var spray_radius := float(params.get("spray_radius", 0.0))
-	var curve: Dictionary = _parse_spacing_curve(params.get("spacing_curve", null))
-	var total_length := _polyline_length(points)
+	var curve: Dictionary = Parsers.parse_spacing_curve(params.get("spacing_curve", null))
+	var total_length := Drawing.polyline_length(points)
 	var traveled := 0.0
 	for i in range(points.size() - 1):
 		var a: Variant = points[i]
@@ -2534,7 +2482,7 @@ func _handle_brush_stroke(params: Dictionary) -> Dictionary:
 		var t0 := 0.0
 		if total_length > 0.0:
 			t0 = traveled / total_length
-		var spacing_mul: float = _spacing_curve_value(curve, t0)
+		var spacing_mul: float = Drawing.spacing_curve_value(curve, t0)
 		var step: float = spacing * spacing_mul
 		if step < 0.5:
 			step = 0.5
@@ -2542,7 +2490,7 @@ func _handle_brush_stroke(params: Dictionary) -> Dictionary:
 		for s in range(steps + 1):
 			var t := 0.0 if steps == 0 else float(s) / float(steps)
 			var pos := v1 + segment * t
-			_apply_brush_with_variation(
+			BrushHelpers.apply_brush_with_variation(
 				cel.image,
 				brush,
 				Vector2i(int(round(pos.x)), int(round(pos.y))),
@@ -2584,60 +2532,15 @@ func _handle_palette_export(params: Dictionary) -> Dictionary:
 	var ext := path.get_extension().to_lower()
 	var err := OK
 	if ext == "gpl":
-		err = _palette_export_gpl(palette, path)
+		err = ExportUtils.palette_export_gpl(palette, path)
 	elif ext == "pal":
-		err = _palette_export_pal(palette, path)
+		err = ExportUtils.palette_export_pal(palette, path)
 	else:
 		palette.path = path
 		err = palette.save_to_file()
 	if err != OK:
 		return _err("export_failed", error_string(err))
 	return {"path": path, "format": ext if not ext.is_empty() else "json"}
-
-
-func _palette_export_gpl(palette: Palette, path: String) -> int:
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if not is_instance_valid(file):
-		return FileAccess.get_open_error()
-	file.store_line("GIMP Palette")
-	file.store_line("Name: %s" % palette.name)
-	file.store_line("Columns: %d" % maxi(1, palette.width))
-	file.store_line("#")
-	var keys: Array = palette.colors.keys()
-	keys.sort()
-	for key in keys:
-		var pc: Palette.PaletteColor = palette.colors[key]
-		if pc == null:
-			continue
-		var c := pc.color
-		var r := clampi(int(round(c.r * 255.0)), 0, 255)
-		var g := clampi(int(round(c.g * 255.0)), 0, 255)
-		var b := clampi(int(round(c.b * 255.0)), 0, 255)
-		file.store_line("%d %d %d\tColor%d" % [r, g, b, int(key)])
-	file.close()
-	return OK
-
-
-func _palette_export_pal(palette: Palette, path: String) -> int:
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if not is_instance_valid(file):
-		return FileAccess.get_open_error()
-	file.store_line("JASC-PAL")
-	file.store_line("0100")
-	var keys: Array = palette.colors.keys()
-	keys.sort()
-	file.store_line(str(keys.size()))
-	for key in keys:
-		var pc: Palette.PaletteColor = palette.colors[key]
-		if pc == null:
-			continue
-		var c := pc.color
-		var r := clampi(int(round(c.r * 255.0)), 0, 255)
-		var g := clampi(int(round(c.g * 255.0)), 0, 255)
-		var b := clampi(int(round(c.b * 255.0)), 0, 255)
-		file.store_line("%d %d %d" % [r, g, b])
-	file.close()
-	return OK
 
 
 func _handle_three_d_object_list(params: Dictionary) -> Dictionary:
@@ -2682,7 +2585,7 @@ func _handle_three_d_object_add(params: Dictionary) -> Dictionary:
 	var cel := _get_3d_cel(frame_idx, layer_idx)
 	if cel == null:
 		return _err("invalid_cel", "not a Cel3D")
-	var obj_type := _parse_three_d_type(params.get("type", null))
+	var obj_type := Parsers.parse_three_d_type(params.get("type", null))
 	if obj_type < 0:
 		return _err("invalid_type", "unknown 3d type")
 	var current_transform := Transform3D()
@@ -2733,7 +2636,7 @@ func _handle_three_d_object_update(params: Dictionary) -> Dictionary:
 		return _err("invalid_id", "object not found")
 	var data := obj.serialize()
 	if params.has("type"):
-		var obj_type := _parse_three_d_type(params.get("type", null))
+		var obj_type := Parsers.parse_three_d_type(params.get("type", null))
 		if obj_type >= 0:
 			data["type"] = obj_type
 	if params.has("file_path"):
@@ -2746,229 +2649,6 @@ func _handle_three_d_object_update(params: Dictionary) -> Dictionary:
 	obj.deserialize(data)
 	cel.object_properties[obj_id] = obj.serialize()
 	return {"ok": true}
-
-
-func _shader_uniform_schema(shader: Shader) -> Array:
-	return _parse_shader_uniforms(shader)
-
-
-func _parse_shader_uniforms(shader: Shader) -> Array:
-	var code_lines: Array = shader.code.split("\n")
-	var uniforms: Array = []
-	var uniform_data: Array = []
-	var current_group := ""
-	for line in code_lines:
-		var stripped := String(line).strip_edges()
-		if stripped.begins_with("// uniform_data"):
-			uniform_data.append(stripped)
-		if stripped.begins_with("group_uniforms"):
-			var parts := stripped.split(" ")
-			if parts.size() >= 2:
-				current_group = parts[1]
-			continue
-		if not stripped.begins_with("uniform"):
-			continue
-		var uniform_split := stripped.split("=")
-		var u_value := ""
-		if uniform_split.size() > 1:
-			u_value = uniform_split[1].replace(";", "").strip_edges()
-		else:
-			uniform_split[0] = uniform_split[0].replace(";", "").strip_edges()
-		var u_left_side := uniform_split[0].split(":")
-		var u_hint := ""
-		if u_left_side.size() > 1:
-			u_hint = u_left_side[1].strip_edges().replace(";", "")
-		var left := u_left_side[0].replace(";", "").strip_edges()
-		var raw_tokens := left.split(" ")
-		var tokens: Array = []
-		for t in raw_tokens:
-			var s := String(t)
-			if not s.is_empty():
-				tokens.append(s)
-		if tokens.size() < 3:
-			continue
-		var u_name := String(tokens[tokens.size() - 1])
-		if u_name in ["PXO_time", "PXO_frame_index", "PXO_layer_index"]:
-			continue
-		var u_type := String(tokens[1])
-		var custom_data: Array = []
-		var type_override := ""
-		for data in uniform_data:
-			if u_name in data:
-				custom_data.append(data)
-				var line_to_examine := String(data).split(" ")
-				if line_to_examine.size() >= 4 and line_to_examine[3] == "type::":
-					var temp_splitter := String(data).split("::")
-					if temp_splitter.size() > 1:
-						type_override = temp_splitter[1].strip_edges()
-		uniforms.append(
-			{
-				"name": u_name,
-				"type": u_type,
-				"hint": u_hint,
-				"default": u_value,
-				"group": current_group,
-				"custom": type_override,
-				"data": custom_data
-			}
-		)
-	return uniforms
-
-
-func _normalize_shader_params(shader: Shader, params: Dictionary, strict: bool) -> Dictionary:
-	var schema: Array = _shader_uniform_schema(shader)
-	var lookup: Dictionary = {}
-	for item in schema:
-		lookup[item["name"]] = item
-	var normalized: Dictionary = {}
-	for key in params.keys():
-		var name := str(key)
-		if not lookup.has(name):
-			if strict:
-				return _err("invalid_param", "unknown uniform: " + name)
-			normalized[name] = params[key]
-			continue
-		var info: Dictionary = lookup[name]
-		var converted := _coerce_shader_param(name, info, params[key], strict)
-		if converted.has("_error"):
-			return converted
-		normalized[name] = converted.get("value", params[key])
-	return {"params": normalized, "schema": schema}
-
-
-func _coerce_shader_param(name: String, info: Dictionary, value: Variant, strict: bool) -> Dictionary:
-	var hint := str(info.get("hint", ""))
-	var type_val: Variant = info.get("type", TYPE_NIL)
-	if typeof(type_val) == TYPE_INT:
-		var t := int(type_val)
-		if t == TYPE_FLOAT:
-			if typeof(value) == TYPE_FLOAT or typeof(value) == TYPE_INT:
-				var v := float(value)
-				return _validate_number_range(name, v, hint, strict)
-			return _err("invalid_param", "expected float for " + name)
-		if t == TYPE_INT:
-			if typeof(value) == TYPE_FLOAT or typeof(value) == TYPE_INT:
-				var v2 := int(round(float(value)))
-				return _validate_number_range(name, float(v2), hint, strict)
-			return _err("invalid_param", "expected int for " + name)
-		if t == TYPE_BOOL:
-			return {"value": bool(value)}
-		if t == TYPE_VECTOR2:
-			if typeof(value) == TYPE_VECTOR2:
-				return {"value": value}
-			if typeof(value) == TYPE_ARRAY and value.size() >= 2:
-				return {"value": Vector2(float(value[0]), float(value[1]))}
-			return _err("invalid_param", "expected vec2 for " + name)
-		if t == TYPE_VECTOR3:
-			if typeof(value) == TYPE_VECTOR3:
-				return {"value": value}
-			if typeof(value) == TYPE_ARRAY and value.size() >= 3:
-				return {"value": Vector3(float(value[0]), float(value[1]), float(value[2]))}
-			return _err("invalid_param", "expected vec3 for " + name)
-		if t == TYPE_VECTOR4:
-			if typeof(value) == TYPE_VECTOR4:
-				return {"value": value}
-			if typeof(value) == TYPE_ARRAY and value.size() >= 4:
-				return {"value": Vector4(float(value[0]), float(value[1]), float(value[2]), float(value[3]))}
-			return _err("invalid_param", "expected vec4 for " + name)
-		if t == TYPE_COLOR:
-			if typeof(value) == TYPE_COLOR:
-				return {"value": value}
-			return {"value": _parse_color(value)}
-		return {"value": value}
-
-	var type_name := str(type_val).to_lower()
-	if type_name == "float":
-		if typeof(value) == TYPE_FLOAT or typeof(value) == TYPE_INT:
-			var v3 := float(value)
-			return _validate_number_range(name, v3, hint, strict)
-		return _err("invalid_param", "expected float for " + name)
-	if type_name == "int":
-		if typeof(value) == TYPE_FLOAT or typeof(value) == TYPE_INT:
-			var v4 := int(round(float(value)))
-			return _validate_number_range(name, float(v4), hint, strict)
-		return _err("invalid_param", "expected int for " + name)
-	if type_name == "bool":
-		return {"value": bool(value)}
-	if type_name in ["vec2", "ivec2", "uvec2"]:
-		if typeof(value) == TYPE_VECTOR2:
-			return {"value": value}
-		if typeof(value) == TYPE_ARRAY and value.size() >= 2:
-			return {"value": Vector2(float(value[0]), float(value[1]))}
-		return _err("invalid_param", "expected vec2 for " + name)
-	if type_name in ["vec3", "ivec3", "uvec3"]:
-		if typeof(value) == TYPE_VECTOR3:
-			return {"value": value}
-		if typeof(value) == TYPE_ARRAY and value.size() >= 3:
-			return {"value": Vector3(float(value[0]), float(value[1]), float(value[2]))}
-		return _err("invalid_param", "expected vec3 for " + name)
-	if type_name in ["vec4", "ivec4", "uvec4"]:
-		if typeof(value) == TYPE_VECTOR4:
-			return {"value": value}
-		if typeof(value) == TYPE_ARRAY and value.size() >= 4:
-			return {"value": Vector4(float(value[0]), float(value[1]), float(value[2]), float(value[3]))}
-		return {"value": _parse_color(value)}
-	return {"value": value}
-
-
-func _validate_number_range(name: String, value: float, hint: String, strict: bool) -> Dictionary:
-	var range := _parse_hint_range(hint)
-	if range.is_empty():
-		return {"value": value}
-	var min_v := float(range.get("min", value))
-	var max_v := float(range.get("max", value))
-	if value < min_v or value > max_v:
-		if strict:
-			return _err("invalid_param", "value out of range for " + name)
-	return {"value": clampf(value, min_v, max_v)}
-
-
-func _parse_hint_range(hint: String) -> Dictionary:
-	if not hint.contains("hint_range"):
-		return {}
-	var start := hint.find("hint_range(")
-	if start == -1:
-		return {}
-	var end := hint.find(")", start)
-	if end == -1:
-		return {}
-	var inside := hint.substr(start + "hint_range(".length(), end - (start + "hint_range(".length()))
-	var parts := inside.split(",", false)
-	if parts.size() < 2:
-		return {}
-	if not parts[0].strip_edges().is_valid_float():
-		return {}
-	if not parts[1].strip_edges().is_valid_float():
-		return {}
-	var result := {"min": float(parts[0]), "max": float(parts[1])}
-	if parts.size() >= 3 and parts[2].strip_edges().is_valid_float():
-		result["step"] = float(parts[2])
-	return result
-
-
-func _parse_interpolation(value) -> int:
-	if typeof(value) == TYPE_INT:
-		return int(value)
-	var v := str(value).to_lower()
-	if v == "linear" or v == "bilinear":
-		return Image.INTERPOLATE_BILINEAR
-	if v == "cubic":
-		return Image.INTERPOLATE_CUBIC
-	return Image.INTERPOLATE_NEAREST
-
-
-func _export_layer_path(base_path: String, layer_name: String, index: int) -> String:
-	var ext := base_path.get_extension()
-	var base := base_path
-	if not ext.is_empty():
-		base = base_path.substr(0, base_path.length() - ext.length() - 1)
-	var safe := layer_name.strip_edges()
-	safe = safe.replace(" ", "_").replace("/", "_").replace("\\", "_")
-	if safe.is_empty():
-		safe = "layer" + str(index)
-	if ext.is_empty():
-		return base + "_" + safe
-	return base + "_" + safe + "." + ext
 
 
 func _get_extension_version() -> String:
@@ -2992,39 +2672,6 @@ func _get_extension_version() -> String:
 	if data.has("version"):
 		_extension_version = str(data.get("version", ""))
 	return _extension_version
-
-
-func _parse_color(value) -> Color:
-	if typeof(value) == TYPE_STRING:
-		return Color.from_string(value, Color.TRANSPARENT)
-	if typeof(value) == TYPE_DICTIONARY:
-		var r = float(value.get("r", 0.0))
-		var g = float(value.get("g", 0.0))
-		var b = float(value.get("b", 0.0))
-		var a = float(value.get("a", 1.0))
-		if r > 1.0 or g > 1.0 or b > 1.0 or a > 1.0:
-			return Color(r / 255.0, g / 255.0, b / 255.0, a / 255.0)
-		return Color(r, g, b, a)
-	if typeof(value) == TYPE_ARRAY:
-		var arr: Array = value
-		if arr.size() == 1 and typeof(arr[0]) == TYPE_STRING:
-			return Color.from_string(str(arr[0]), Color.TRANSPARENT)
-		var r := 0.0
-		var g := 0.0
-		var b := 0.0
-		var a := 1.0
-		if arr.size() > 0:
-			r = float(arr[0])
-		if arr.size() > 1:
-			g = float(arr[1])
-		if arr.size() > 2:
-			b = float(arr[2])
-		if arr.size() > 3:
-			a = float(arr[3])
-		if r > 1.0 or g > 1.0 or b > 1.0 or a > 1.0:
-			return Color(r / 255.0, g / 255.0, b / 255.0, a / 255.0)
-		return Color(r, g, b, a)
-	return Color.TRANSPARENT
 
 
 func _err(code: String, message: String) -> Dictionary:
@@ -3105,7 +2752,7 @@ func _serialize_effect_params(params: Dictionary) -> Dictionary:
 		if t in [TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_BOOL]:
 			out[key] = value
 		elif t == TYPE_COLOR:
-			out[key] = _color_to_array(value)
+			out[key] = Drawing.color_to_array(value)
 		elif t == TYPE_VECTOR2 or t == TYPE_VECTOR2I:
 			out[key] = [value.x, value.y]
 		elif t == TYPE_VECTOR3 or t == TYPE_VECTOR3I:
@@ -3115,597 +2762,16 @@ func _serialize_effect_params(params: Dictionary) -> Dictionary:
 	return out
 
 
-func _parse_vector3(value: Variant, default_value: Vector3) -> Vector3:
-	if typeof(value) == TYPE_ARRAY:
-		var arr: Array = value
-		if arr.size() >= 3:
-			return Vector3(float(arr[0]), float(arr[1]), float(arr[2]))
-	if typeof(value) == TYPE_DICTIONARY:
-		var dict: Dictionary = value
-		return Vector3(
-			float(dict.get("x", default_value.x)),
-			float(dict.get("y", default_value.y)),
-			float(dict.get("z", default_value.z))
-		)
-	return default_value
-
-
 func _build_transform(params: Dictionary, current: Transform3D) -> Transform3D:
-	var pos := _parse_vector3(params.get("position", null), current.origin)
-	var scale := _parse_vector3(params.get("scale", null), current.basis.get_scale())
+	var pos := Parsers.parse_vector3(params.get("position", null), current.origin)
+	var scale := Parsers.parse_vector3(params.get("scale", null), current.basis.get_scale())
 	var rot := current.basis.get_euler()
 	if params.has("rotation"):
-		rot = _parse_vector3(params.get("rotation", null), rot)
+		rot = Parsers.parse_vector3(params.get("rotation", null), rot)
 	elif params.has("rotation_degrees"):
-		var rot_deg := _parse_vector3(params.get("rotation_degrees", null), rot * 180.0 / PI)
+		var rot_deg := Parsers.parse_vector3(params.get("rotation_degrees", null), rot * 180.0 / PI)
 		rot = Vector3(deg_to_rad(rot_deg.x), deg_to_rad(rot_deg.y), deg_to_rad(rot_deg.z))
 	var basis := Basis.from_euler(rot)
 	basis = basis.scaled(scale)
 	return Transform3D(basis, pos)
 
-
-func _parse_tile_shape(value) -> int:
-	if typeof(value) == TYPE_INT:
-		return int(value)
-	if typeof(value) == TYPE_STRING:
-		var v := String(value).to_lower()
-		if v == "square":
-			return TileSet.TILE_SHAPE_SQUARE
-		if v == "isometric":
-			return TileSet.TILE_SHAPE_ISOMETRIC
-		if v == "half_offset":
-			return TileSet.TILE_SHAPE_HALF_OFFSET_SQUARE
-		if v == "hexagon":
-			return TileSet.TILE_SHAPE_HEXAGON
-	return -1
-
-
-func _parse_tile_layout(value) -> int:
-	if typeof(value) == TYPE_INT:
-		return int(value)
-	if typeof(value) == TYPE_STRING:
-		var v := String(value).to_lower()
-		if v == "stacked":
-			return TileSet.TILE_LAYOUT_STACKED
-		if v == "stacked_offset":
-			return TileSet.TILE_LAYOUT_STACKED_OFFSET
-		if v == "stairs_right":
-			return TileSet.TILE_LAYOUT_STAIRS_RIGHT
-		if v == "stairs_down":
-			return TileSet.TILE_LAYOUT_STAIRS_DOWN
-		if v == "diamond_down":
-			return TileSet.TILE_LAYOUT_DIAMOND_DOWN
-		if v == "diamond_right":
-			return TileSet.TILE_LAYOUT_DIAMOND_RIGHT
-	return -1
-
-
-func _parse_tile_offset_axis(value) -> int:
-	if typeof(value) == TYPE_INT:
-		return int(value)
-	if typeof(value) == TYPE_STRING:
-		var v := String(value).to_lower()
-		if v == "horizontal":
-			return TileSet.TILE_OFFSET_AXIS_HORIZONTAL
-		if v == "vertical":
-			return TileSet.TILE_OFFSET_AXIS_VERTICAL
-	return -1
-
-
-func _parse_three_d_type(value) -> int:
-	if typeof(value) == TYPE_INT:
-		return int(value)
-	if typeof(value) == TYPE_STRING:
-		var v := String(value).to_lower()
-		if v == "box":
-			return Cel3DObject.Type.BOX
-		if v == "sphere":
-			return Cel3DObject.Type.SPHERE
-		if v == "capsule":
-			return Cel3DObject.Type.CAPSULE
-		if v == "cylinder":
-			return Cel3DObject.Type.CYLINDER
-		if v == "prism":
-			return Cel3DObject.Type.PRISM
-		if v == "torus":
-			return Cel3DObject.Type.TORUS
-		if v == "plane":
-			return Cel3DObject.Type.PLANE
-		if v == "text":
-			return Cel3DObject.Type.TEXT
-		if v == "dir_light" or v == "directional_light":
-			return Cel3DObject.Type.DIR_LIGHT
-		if v == "spot_light":
-			return Cel3DObject.Type.SPOT_LIGHT
-		if v == "omni_light":
-			return Cel3DObject.Type.OMNI_LIGHT
-		if v == "imported":
-			return Cel3DObject.Type.IMPORTED
-	return -1
-
-
-func _parse_blend_mode(value) -> int:
-	if typeof(value) == TYPE_INT:
-		return int(value)
-	if typeof(value) == TYPE_STRING:
-		var v := String(value).to_lower()
-		if v == "pass_through":
-			return BaseLayer.BlendModes.PASS_THROUGH
-		if v == "normal":
-			return BaseLayer.BlendModes.NORMAL
-		if v == "erase":
-			return BaseLayer.BlendModes.ERASE
-		if v == "darken":
-			return BaseLayer.BlendModes.DARKEN
-		if v == "multiply":
-			return BaseLayer.BlendModes.MULTIPLY
-		if v == "color_burn":
-			return BaseLayer.BlendModes.COLOR_BURN
-		if v == "linear_burn":
-			return BaseLayer.BlendModes.LINEAR_BURN
-		if v == "lighten":
-			return BaseLayer.BlendModes.LIGHTEN
-		if v == "screen":
-			return BaseLayer.BlendModes.SCREEN
-		if v == "color_dodge":
-			return BaseLayer.BlendModes.COLOR_DODGE
-		if v == "add":
-			return BaseLayer.BlendModes.ADD
-		if v == "overlay":
-			return BaseLayer.BlendModes.OVERLAY
-		if v == "soft_light":
-			return BaseLayer.BlendModes.SOFT_LIGHT
-		if v == "hard_light":
-			return BaseLayer.BlendModes.HARD_LIGHT
-		if v == "difference":
-			return BaseLayer.BlendModes.DIFFERENCE
-		if v == "exclusion":
-			return BaseLayer.BlendModes.EXCLUSION
-		if v == "subtract":
-			return BaseLayer.BlendModes.SUBTRACT
-		if v == "divide":
-			return BaseLayer.BlendModes.DIVIDE
-		if v == "hue":
-			return BaseLayer.BlendModes.HUE
-		if v == "saturation":
-			return BaseLayer.BlendModes.SATURATION
-		if v == "color":
-			return BaseLayer.BlendModes.COLOR
-		if v == "luminosity":
-			return BaseLayer.BlendModes.LUMINOSITY
-	return -1
-
-
-func _parse_animation_direction(value) -> int:
-	if typeof(value) == TYPE_INT:
-		return int(value)
-	if typeof(value) == TYPE_STRING:
-		var v := String(value).to_lower()
-		if v == "backwards":
-			return Export.AnimationDirection.BACKWARDS
-		if v == "ping_pong" or v == "pingpong":
-			return Export.AnimationDirection.PING_PONG
-	return Export.AnimationDirection.FORWARD
-
-
-func _parse_spritesheet_orientation(value) -> int:
-	if typeof(value) == TYPE_INT:
-		return int(value)
-	if typeof(value) == TYPE_STRING:
-		var v := String(value).to_lower()
-		if v == "columns":
-			return Export.Orientation.COLUMNS
-		if v == "tags_by_row":
-			return Export.Orientation.TAGS_BY_ROW
-		if v == "tags_by_column":
-			return Export.Orientation.TAGS_BY_COLUMN
-	return Export.Orientation.ROWS
-
-
-func _export_gif_frames(frames: Array) -> PackedByteArray:
-	var GIFExporter := preload("res://addons/gdgifexporter/exporter.gd")
-	var MedianCutQuantization := preload("res://addons/gdgifexporter/quantization/median_cut.gd")
-	var first_frame: AImgIOFrame = frames[0]
-	var exporter := GIFExporter.new(first_frame.content.get_width(), first_frame.content.get_height())
-	for v in frames:
-		var frame: AImgIOFrame = v
-		exporter.add_frame(frame.content, frame.duration, MedianCutQuantization)
-	return exporter.export_file_data()
-
-
-func _export_apng_frames(frames: Array, fps_hint: float) -> PackedByteArray:
-	var result := AImgIOAPNGStream.new()
-	result.write_magic()
-	var image: Image = frames[0].content
-	var chunk := result.start_chunk()
-	chunk.put_32(image.get_width())
-	chunk.put_32(image.get_height())
-	chunk.put_32(0x08060000)
-	chunk.put_8(0)
-	result.write_chunk("IHDR", chunk.data_array)
-	chunk = result.start_chunk()
-	chunk.put_32(frames.size())
-	chunk.put_32(0)
-	result.write_chunk("acTL", chunk.data_array)
-	var sequence := 0
-	for i in range(frames.size()):
-		image = frames[i].content
-		chunk = result.start_chunk()
-		chunk.put_32(sequence)
-		sequence += 1
-		chunk.put_32(image.get_width())
-		chunk.put_32(image.get_height())
-		chunk.put_32(0)
-		chunk.put_32(0)
-		_apng_write_delay(chunk, frames[i].duration, fps_hint)
-		chunk.put_8(0)
-		chunk.put_8(0)
-		result.write_chunk("fcTL", chunk.data_array)
-		chunk = result.start_chunk()
-		if i != 0:
-			chunk.put_32(sequence)
-			sequence += 1
-		var ichk := result.start_chunk()
-		_apng_write_padded_lines(ichk, image)
-		chunk.put_data(ichk.data_array.compress(FileAccess.COMPRESSION_DEFLATE))
-		if i == 0:
-			result.write_chunk("IDAT", chunk.data_array)
-		else:
-			result.write_chunk("fdAT", chunk.data_array)
-	result.write_chunk("IEND", PackedByteArray())
-	return result.finish()
-
-
-func _apng_write_delay(sp: StreamPeer, duration: float, fps_hint: float) -> void:
-	duration = max(duration, 0)
-	fps_hint = min(32767, max(fps_hint, 1))
-	var den: float = min(32767.0, max(fps_hint, 1.0))
-	var num: float = max(duration, 0) * den
-	var fallback := 10000
-	while num > 32767:
-		num = max(duration, 0) * den
-		den = fallback
-		if fallback == 1:
-			break
-		fallback /= 10
-	if num > 32767:
-		sp.put_16(1)
-		sp.put_16(1)
-		return
-	while num < 16384 and den < 16384:
-		num *= 2
-		den *= 2
-	sp.put_16(int(round(num)))
-	sp.put_16(int(round(den)))
-
-
-func _apng_write_padded_lines(sp: StreamPeer, img: Image) -> void:
-	if img.get_format() != Image.FORMAT_RGBA8:
-		return
-	var data := img.get_data()
-	var y := 0
-	var w := img.get_width()
-	var h := img.get_height()
-	var base := 0
-	while y < h:
-		var nl := base + (w * 4)
-		var line := data.slice(base, nl)
-		sp.put_8(0)
-		sp.put_data(line)
-		y += 1
-		base = nl
-
-
-func _pick_weighted_index(indices: Array, weights: Array) -> int:
-	if weights.size() != indices.size() or weights.is_empty():
-		return int(indices[randi() % indices.size()])
-	var total := 0.0
-	for w in weights:
-		total += float(w)
-	var r := randf() * total
-	var acc := 0.0
-	for i in range(indices.size()):
-		acc += float(weights[i])
-		if acc >= r:
-			return int(indices[i])
-	return int(indices[0])
-
-
-func _build_brush_image(params: Dictionary) -> Image:
-	if params.has("brush_index"):
-		if not _require_project():
-			return null
-		var project: Project = Global.current_project
-		var idx := int(params.get("brush_index", -1))
-		if idx >= 0 and idx < project.brushes.size():
-			return project.brushes[idx]
-	var path := str(params.get("brush_path", ""))
-	var data_str := str(params.get("brush_data", ""))
-	var image := Image.new()
-	if not path.is_empty():
-		if image.load(path) != OK:
-			return null
-	elif not data_str.is_empty():
-		var raw := Marshalls.base64_to_raw(data_str)
-		if image.load_png_from_buffer(raw) != OK:
-			return null
-	else:
-		var brush_type := str(params.get("brush_type", "pixel")).to_lower()
-		var size := int(params.get("size", 1))
-		size = maxi(1, size)
-		image = Image.create(size, size, false, Image.FORMAT_RGBA8)
-		image.fill(Color(0, 0, 0, 0))
-		if brush_type == "circle":
-			var points := DrawingAlgos.get_ellipse_points(Vector2i.ZERO, Vector2i(size - 1, size - 1))
-			for p in points:
-				if typeof(p) == TYPE_VECTOR2I:
-					image.set_pixelv(p, Color.WHITE)
-		elif brush_type == "filled_circle":
-			var points_filled := DrawingAlgos.get_ellipse_points_filled(
-				Vector2i.ZERO, Vector2i(size - 1, size - 1), 1
-			)
-			for p2 in points_filled:
-				if typeof(p2) == TYPE_VECTOR2I:
-					image.set_pixelv(p2, Color.WHITE)
-		else:
-			image.fill(Color.WHITE)
-	image.convert(Image.FORMAT_RGBA8)
-	var scale := int(params.get("scale", 1))
-	if scale > 1:
-		image.resize(image.get_width() * scale, image.get_height() * scale, Image.INTERPOLATE_NEAREST)
-	return image
-
-
-func _apply_brush(
-	target: Image,
-	brush: Image,
-	pos: Vector2i,
-	color: Color,
-	opacity: float,
-	mode: String
-) -> void:
-	var brush_img := Image.new()
-	brush_img.copy_from(brush)
-	var size := brush_img.get_size()
-	var dst := pos - size / 2
-	var mode_l := mode.to_lower()
-	if mode_l == "erase":
-		var blank := Image.create(size.x, size.y, false, target.get_format())
-		blank.fill(Color(0, 0, 0, 0))
-		target.blit_rect_mask(blank, brush_img, Rect2i(Vector2i.ZERO, size), dst)
-		return
-	for y in size.y:
-		for x in size.x:
-			var pix := brush_img.get_pixel(x, y)
-			if pix.a <= 0.0:
-				continue
-			var c := color
-			c.a = pix.a * opacity
-			brush_img.set_pixel(x, y, c)
-	if mode_l == "paint" or mode_l == "normal":
-		target.blend_rect(brush_img, Rect2i(Vector2i.ZERO, size), dst)
-		return
-	for y2 in size.y:
-		for x2 in size.x:
-			var src := brush_img.get_pixel(x2, y2)
-			if src.a <= 0.0:
-				continue
-			var tx := dst.x + x2
-			var ty := dst.y + y2
-			if tx < 0 or ty < 0 or tx >= target.get_width() or ty >= target.get_height():
-				continue
-			var dst_c := target.get_pixel(tx, ty)
-			var blended := _blend_mode_color(src, dst_c, mode_l)
-			var out_r := dst_c.r * (1.0 - src.a) + blended.r * src.a
-			var out_g := dst_c.g * (1.0 - src.a) + blended.g * src.a
-			var out_b := dst_c.b * (1.0 - src.a) + blended.b * src.a
-			var out_a := dst_c.a + src.a * (1.0 - dst_c.a)
-			target.set_pixel(tx, ty, Color(out_r, out_g, out_b, out_a))
-
-
-func _apply_brush_with_variation(
-	target: Image,
-	brush: Image,
-	pos: Vector2i,
-	color: Color,
-	opacity: float,
-	mode: String,
-	jitter: float,
-	spray: int,
-	spray_radius: float
-) -> void:
-	if spray > 0:
-		for i in range(spray):
-			var offset := _random_offset(spray_radius)
-			var jitter_offset := _random_offset(jitter)
-			_apply_brush(target, brush, pos + offset + jitter_offset, color, opacity, mode)
-		return
-	var jitter_offset2 := _random_offset(jitter)
-	_apply_brush(target, brush, pos + jitter_offset2, color, opacity, mode)
-
-
-func _random_offset(radius: float) -> Vector2i:
-	if radius <= 0.0:
-		return Vector2i.ZERO
-	var angle := randf() * TAU
-	var r := sqrt(randf()) * radius
-	return Vector2i(int(round(cos(angle) * r)), int(round(sin(angle) * r)))
-
-
-func _blend_mode_color(src: Color, dst: Color, mode: String) -> Color:
-	match mode:
-		"multiply":
-			return Color(dst.r * src.r, dst.g * src.g, dst.b * src.b, 1.0)
-		"screen":
-			return Color(
-				1.0 - (1.0 - dst.r) * (1.0 - src.r),
-				1.0 - (1.0 - dst.g) * (1.0 - src.g),
-				1.0 - (1.0 - dst.b) * (1.0 - src.b),
-				1.0
-			)
-		"overlay":
-			return Color(
-				_blend_overlay(dst.r, src.r),
-				_blend_overlay(dst.g, src.g),
-				_blend_overlay(dst.b, src.b),
-				1.0
-			)
-		"add":
-			return Color(
-				min(dst.r + src.r, 1.0),
-				min(dst.g + src.g, 1.0),
-				min(dst.b + src.b, 1.0),
-				1.0
-			)
-		"subtract":
-			return Color(
-				max(dst.r - src.r, 0.0),
-				max(dst.g - src.g, 0.0),
-				max(dst.b - src.b, 0.0),
-				1.0
-			)
-		"replace":
-			return Color(src.r, src.g, src.b, 1.0)
-		_:
-			return Color(src.r, src.g, src.b, 1.0)
-
-
-func _blend_overlay(dst: float, src: float) -> float:
-	if dst < 0.5:
-		return 2.0 * dst * src
-	return 1.0 - 2.0 * (1.0 - dst) * (1.0 - src)
-
-
-func _parse_spacing_curve(value) -> Dictionary:
-	var curve: Dictionary = {"type": "none"}
-	if typeof(value) == TYPE_STRING:
-		curve["type"] = "preset"
-		curve["name"] = str(value).to_lower()
-		return curve
-	if typeof(value) == TYPE_ARRAY:
-		var arr: Array = value
-		if arr.is_empty():
-			return curve
-		var points: Array = []
-		if typeof(arr[0]) == TYPE_DICTIONARY:
-			for item in arr:
-				if typeof(item) != TYPE_DICTIONARY:
-					continue
-				var t := float(item.get("t", 0.0))
-				var v := float(item.get("value", 1.0))
-				points.append(Vector2(t, v))
-		else:
-			for i in range(arr.size()):
-				var v2 := float(arr[i])
-				var t2 := 0.0
-				if arr.size() > 1:
-					t2 = float(i) / float(arr.size() - 1)
-				points.append(Vector2(t2, v2))
-		if not points.is_empty():
-			points.sort_custom(func(a, b): return a.x < b.x)
-			curve["type"] = "points"
-			curve["points"] = points
-	return curve
-
-
-func _spacing_curve_value(curve: Dictionary, t: float) -> float:
-	if curve.is_empty():
-		return 1.0
-	var curve_type := str(curve.get("type", "none"))
-	if curve_type == "preset":
-		var name := str(curve.get("name", "linear"))
-		if name == "ease_in":
-			return 0.5 + 0.5 * t
-		if name == "ease_out":
-			return 1.5 - 0.5 * t
-		if name == "ease_in_out":
-			return 0.75 + 0.5 * (1.0 - abs(2.0 * t - 1.0))
-		return 1.0
-	if curve_type == "points":
-		var points: Array = curve.get("points", [])
-		if points.is_empty():
-			return 1.0
-		if t <= points[0].x:
-			return max(0.1, points[0].y)
-		if t >= points[points.size() - 1].x:
-			return max(0.1, points[points.size() - 1].y)
-		for i in range(points.size() - 1):
-			var a: Vector2 = points[i]
-			var b: Vector2 = points[i + 1]
-			if t >= a.x and t <= b.x:
-				var local_t := 0.0
-				if b.x > a.x:
-					local_t = (t - a.x) / (b.x - a.x)
-				return max(0.1, lerp(a.y, b.y, local_t))
-	return 1.0
-
-
-func _polyline_length(points: Array) -> float:
-	var total := 0.0
-	for i in range(points.size() - 1):
-		var a: Variant = points[i]
-		var b: Variant = points[i + 1]
-		if typeof(a) != TYPE_ARRAY or typeof(b) != TYPE_ARRAY:
-			continue
-		if a.size() < 2 or b.size() < 2:
-			continue
-		var v1 := Vector2(float(a[0]), float(a[1]))
-		var v2 := Vector2(float(b[0]), float(b[1]))
-		total += (v2 - v1).length()
-	return total
-
-
-func _color_to_array(color: Color) -> Array:
-	return [color.r, color.g, color.b, color.a]
-
-
-func _color_close(a: Color, b: Color, tolerance: float) -> bool:
-	return (
-		abs(a.r - b.r) <= tolerance
-		and abs(a.g - b.g) <= tolerance
-		and abs(a.b - b.b) <= tolerance
-		and abs(a.a - b.a) <= tolerance
-	)
-
-
-func _draw_points(image: Image, points: Array, color: Color, thickness := 1) -> void:
-	var radius := maxi(0, int(thickness / 2))
-	for p in points:
-		if typeof(p) == TYPE_VECTOR2I:
-			_draw_point(image, p, color, radius)
-
-
-func _draw_line_on_image(
-	image: Image, start: Vector2i, end: Vector2i, color: Color, thickness := 1
-) -> void:
-	var points := Geometry2D.bresenham_line(start, end)
-	_draw_points(image, points, color, thickness)
-
-
-func _draw_point(image: Image, p: Vector2i, color: Color, radius := 0) -> void:
-	var w := image.get_width()
-	var h := image.get_height()
-	for dy in range(-radius, radius + 1):
-		for dx in range(-radius, radius + 1):
-			var x := p.x + dx
-			var y := p.y + dy
-			if x >= 0 and y >= 0 and x < w and y < h:
-				image.set_pixel(x, y, color)
-
-
-func _parse_layer_type(value) -> int:
-	if typeof(value) == TYPE_INT:
-		return int(value)
-	if typeof(value) == TYPE_STRING:
-		var v := String(value).to_lower()
-		if v == "pixel":
-			return Global.LayerTypes.PIXEL
-		if v == "group":
-			return Global.LayerTypes.GROUP
-		if v == "three_d" or v == "3d":
-			return Global.LayerTypes.THREE_D
-		if v == "tilemap":
-			return Global.LayerTypes.TILEMAP
-		if v == "audio":
-			return Global.LayerTypes.AUDIO
-	return -1

@@ -38,7 +38,7 @@ class BridgeClient:
         self,
         host=DEFAULT_HOST,
         port=DEFAULT_PORT,
-        timeout=3.0,
+        timeout=30.0,
         ports=None,
         token=DEFAULT_TOKEN,
         expected_protocol: str | None = None,
