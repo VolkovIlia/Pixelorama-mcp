@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "cclsp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "cclsp"
+      ],
+      "env": {
+        "CCLSP_CONFIG_PATH": "./config/cclsp.json"
+      }
+    },
+    "pixelorama": {
+      "command": "python3",
+      "args": ["-m", "pixelorama_mcp"],
+      "cwd": "/home/volk/vibeprojects/Pixelorama-mcp/server",
+      "env": {
+        "PYTHONPATH": "/home/volk/vibeprojects/Pixelorama-mcp/server"
+      }
+    }
+  }
+}

@@ -3,6 +3,9 @@ name = "pixelorama-mcp"
 version = "0.1.0"
 description = "MCP server for Pixelorama bridge"
 requires-python = ">=3.9"
+dependencies = [
+    "Pillow>=9.0",
+]
 
 [project.scripts]
 pixelorama-mcp = "pixelorama_mcp.mcp_server:main"

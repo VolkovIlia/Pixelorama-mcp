@@ -6,3 +6,92 @@ __pycache__/
 
 extension/dist/
 tmp/pixelorama_scene.png
+
+
+# Deadlion Studio - Standard .gitignore Template
+# This file is automatically merged into parent project's .gitignore during installation
+# See: scripts/install-ai-team.sh
+
+# ============================================================================
+# Deadlion Studio - AI Team Runtime Files
+# ============================================================================
+
+# Test logs and runtime logs (generated, never commit)
+.logs/
+tests/reports/
+*.log
+
+# Telemetry runtime data (generated, never commit)
+.telemetry/metrics.db
+.telemetry/alerts/
+.telemetry/reports/
+.telemetry/traces/
+.telemetry/improvements/
+.telemetry/pending-tasks/
+.telemetry/events/
+
+# Technical Documentation and Development Files (DO NOT COMMIT)
+.dev-docs/
+
+# Development reports and technical artifacts (DO NOT COMMIT)
+.dev-reports/
+
+# MCP configuration (keep .mcp.json tracked for project-wide MCP server config)
+
+# ============================================================================
+# Common Development Files
+# ============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# TypeScript
+*.tsbuildinfo
+
+# SQLite Databases (metrics data - never commit)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup and temp files
+*.backup
+*.bak
+*.old
+*.v1
+*.new
+*.tmp
+*.temp
+
+# Deadlion Studio submodule (local only, not committed)
+deadlion-studio/
+.gitmodules

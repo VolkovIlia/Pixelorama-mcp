@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
+import base64
+import io
 import json
 import os
 import sys
 from typing import Any, Dict, Optional
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None  # Pillow optional; to_pixelart will fail gracefully
 
 from .bridge_client import BridgeClient
 
@@ -1327,6 +1334,27 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "image.to_pixelart",
+        "description": (
+            "Convert a photo/image to pixel art. Accepts base64 image or file path, "
+            "resizes to pixel art dimensions, reduces colors, and imports into Pixelorama."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "image_data": {"type": "string", "description": "Base64-encoded image (PNG/JPEG)"},
+                "image_path": {"type": "string", "description": "Path to image file (alternative to image_data)"},
+                "width": {"type": "integer", "default": 64, "description": "Target width in pixels"},
+                "height": {"type": "integer", "default": 64, "description": "Target height in pixels"},
+                "colors": {"type": "integer", "default": 0, "description": "Max colors (0 = no limit)"},
+                "dither": {"type": "boolean", "default": False, "description": "Apply dithering during color reduction"},
+                "project_name": {"type": "string", "default": "pixelart", "description": "Name for the new project"},
+                "keep_aspect": {"type": "boolean", "default": True, "description": "Preserve aspect ratio (fit within width x height)"},
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -1396,6 +1424,19 @@ class StdioTransport:
         self._stdout.flush()
 
 
+# Bridge method name mapping for tools that differ from their MCP name
+_BRIDGE_NAME_MAP = {
+    "bridge.ping": "ping",
+    "bridge.version": "version",
+}
+
+# Tools that skip protocol check (work without verified bridge protocol)
+_SKIP_PROTOCOL_CHECK = {"bridge.ping", "bridge.version", "bridge.info"}
+
+# Tools handled server-side (not passed through to bridge)
+_SERVER_SIDE_TOOLS = {"image.to_pixelart"}
+
+
 class MCPServer:
     def __init__(self):
         self._transport = StdioTransport()
@@ -1403,6 +1444,7 @@ class MCPServer:
         port = int(os.environ.get("PIXELORAMA_BRIDGE_PORT", "8123"))
         self._bridge = BridgeClient(host=host, port=port)
         self._bridge_protocol_checked = False
+        self._tool_names = {t["name"] for t in TOOLS}
 
     def run(self) -> None:
         while True:
@@ -1451,219 +1493,87 @@ class MCPServer:
     def _call_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
         name = params.get("name")
         args = params.get("arguments", {})
-        if name == "bridge.ping":
-            return self._bridge.call("ping", args)
-        if name == "bridge.version":
-            return self._bridge.call("version", args)
-        if name == "bridge.info":
-            return self._bridge.call("bridge.info", args)
-        if name not in ("bridge.ping", "bridge.version", "bridge.info"):
+
+        # Server-side tools (not passed through to bridge)
+        if name == "image.to_pixelart":
+            return self._handle_to_pixelart(args)
+
+        # Validate tool exists in registry
+        if name not in self._tool_names:
+            raise RuntimeError(f"unknown tool: {name}")
+
+        # Protocol check for bridge tools (skip for basic bridge queries)
+        if name not in _SKIP_PROTOCOL_CHECK:
             self._ensure_bridge_protocol()
-        if name == "project.create":
-            return self._bridge.call("project.create", args)
-        if name == "project.open":
-            return self._bridge.call("project.open", args)
-        if name == "project.save":
-            return self._bridge.call("project.save", args)
-        if name == "project.export":
-            return self._bridge.call("project.export", args)
-        if name == "project.info":
-            return self._bridge.call("project.info", args)
-        if name == "project.set_active":
-            return self._bridge.call("project.set_active", args)
-        if name == "project.set_indexed_mode":
-            return self._bridge.call("project.set_indexed_mode", args)
-        if name == "layer.list":
-            return self._bridge.call("layer.list", args)
-        if name == "layer.add":
-            return self._bridge.call("layer.add", args)
-        if name == "layer.remove":
-            return self._bridge.call("layer.remove", args)
-        if name == "layer.rename":
-            return self._bridge.call("layer.rename", args)
-        if name == "layer.move":
-            return self._bridge.call("layer.move", args)
-        if name == "frame.list":
-            return self._bridge.call("frame.list", args)
-        if name == "frame.add":
-            return self._bridge.call("frame.add", args)
-        if name == "frame.remove":
-            return self._bridge.call("frame.remove", args)
-        if name == "frame.duplicate":
-            return self._bridge.call("frame.duplicate", args)
-        if name == "frame.move":
-            return self._bridge.call("frame.move", args)
-        if name == "pixel.get":
-            return self._bridge.call("pixel.get", args)
-        if name == "pixel.set":
-            return self._bridge.call("pixel.set", args)
-        if name == "canvas.fill":
-            return self._bridge.call("canvas.fill", args)
-        if name == "canvas.clear":
-            return self._bridge.call("canvas.clear", args)
-        if name == "canvas.resize":
-            return self._bridge.call("canvas.resize", args)
-        if name == "canvas.crop":
-            return self._bridge.call("canvas.crop", args)
-        if name == "palette.list":
-            return self._bridge.call("palette.list", args)
-        if name == "palette.select":
-            return self._bridge.call("palette.select", args)
-        if name == "palette.create":
-            return self._bridge.call("palette.create", args)
-        if name == "palette.delete":
-            return self._bridge.call("palette.delete", args)
-        if name == "draw.line":
-            return self._bridge.call("draw.line", args)
-        if name == "draw.rect":
-            return self._bridge.call("draw.rect", args)
-        if name == "draw.ellipse":
-            return self._bridge.call("draw.ellipse", args)
-        if name == "draw.erase_line":
-            return self._bridge.call("draw.erase_line", args)
-        if name == "pixel.replace_color":
-            return self._bridge.call("pixel.replace_color", args)
-        if name == "selection.clear":
-            return self._bridge.call("selection.clear", args)
-        if name == "selection.invert":
-            return self._bridge.call("selection.invert", args)
-        if name == "selection.rect":
-            return self._bridge.call("selection.rect", args)
-        if name == "selection.ellipse":
-            return self._bridge.call("selection.ellipse", args)
-        if name == "selection.lasso":
-            return self._bridge.call("selection.lasso", args)
-        if name == "selection.move":
-            return self._bridge.call("selection.move", args)
-        if name == "selection.export_mask":
-            return self._bridge.call("selection.export_mask", args)
-        if name == "symmetry.set":
-            return self._bridge.call("symmetry.set", args)
-        if name == "batch.exec":
-            return self._bridge.call("batch.exec", args)
-        if name == "project.import.sequence":
-            return self._bridge.call("project.import.sequence", args)
-        if name == "project.import.spritesheet":
-            return self._bridge.call("project.import.spritesheet", args)
-        if name == "pixel.set_many":
-            return self._bridge.call("pixel.set_many", args)
-        if name == "pixel.get_region":
-            return self._bridge.call("pixel.get_region", args)
-        if name == "pixel.set_region":
-            return self._bridge.call("pixel.set_region", args)
-        if name == "animation.tags.list":
-            return self._bridge.call("animation.tags.list", args)
-        if name == "animation.tags.add":
-            return self._bridge.call("animation.tags.add", args)
-        if name == "animation.tags.update":
-            return self._bridge.call("animation.tags.update", args)
-        if name == "animation.tags.remove":
-            return self._bridge.call("animation.tags.remove", args)
-        if name == "animation.playback.set":
-            return self._bridge.call("animation.playback.set", args)
-        if name == "tilemap.tileset.list":
-            return self._bridge.call("tilemap.tileset.list", args)
-        if name == "tilemap.tileset.create":
-            return self._bridge.call("tilemap.tileset.create", args)
-        if name == "tilemap.tileset.add_tile":
-            return self._bridge.call("tilemap.tileset.add_tile", args)
-        if name == "tilemap.tileset.remove_tile":
-            return self._bridge.call("tilemap.tileset.remove_tile", args)
-        if name == "tilemap.tileset.replace_tile":
-            return self._bridge.call("tilemap.tileset.replace_tile", args)
-        if name == "tilemap.layer.set_tileset":
-            return self._bridge.call("tilemap.layer.set_tileset", args)
-        if name == "tilemap.layer.set_params":
-            return self._bridge.call("tilemap.layer.set_params", args)
-        if name == "tilemap.offset.set":
-            return self._bridge.call("tilemap.offset.set", args)
-        if name == "tilemap.cell.get":
-            return self._bridge.call("tilemap.cell.get", args)
-        if name == "tilemap.cell.set":
-            return self._bridge.call("tilemap.cell.set", args)
-        if name == "tilemap.cell.clear":
-            return self._bridge.call("tilemap.cell.clear", args)
-        if name == "effect.layer.list":
-            return self._bridge.call("effect.layer.list", args)
-        if name == "effect.layer.add":
-            return self._bridge.call("effect.layer.add", args)
-        if name == "effect.layer.remove":
-            return self._bridge.call("effect.layer.remove", args)
-        if name == "effect.layer.move":
-            return self._bridge.call("effect.layer.move", args)
-        if name == "effect.layer.set_enabled":
-            return self._bridge.call("effect.layer.set_enabled", args)
-        if name == "effect.layer.set_params":
-            return self._bridge.call("effect.layer.set_params", args)
-        if name == "effect.layer.apply":
-            return self._bridge.call("effect.layer.apply", args)
-        if name == "effect.shader.apply":
-            return self._bridge.call("effect.shader.apply", args)
-        if name == "effect.shader.list":
-            return self._bridge.call("effect.shader.list", args)
-        if name == "effect.shader.inspect":
-            return self._bridge.call("effect.shader.inspect", args)
-        if name == "effect.shader.schema":
-            return self._bridge.call("effect.shader.schema", args)
-        if name == "history.undo":
-            return self._bridge.call("history.undo", args)
-        if name == "history.redo":
-            return self._bridge.call("history.redo", args)
-        if name == "project.export.animated":
-            return self._bridge.call("project.export.animated", args)
-        if name == "project.export.spritesheet":
-            return self._bridge.call("project.export.spritesheet", args)
-        if name == "layer.get_props":
-            return self._bridge.call("layer.get_props", args)
-        if name == "layer.set_props":
-            return self._bridge.call("layer.set_props", args)
-        if name == "layer.group.create":
-            return self._bridge.call("layer.group.create", args)
-        if name == "layer.parent.set":
-            return self._bridge.call("layer.parent.set", args)
-        if name == "draw.text":
-            return self._bridge.call("draw.text", args)
-        if name == "draw.gradient":
-            return self._bridge.call("draw.gradient", args)
-        if name == "animation.fps.get":
-            return self._bridge.call("animation.fps.get", args)
-        if name == "animation.fps.set":
-            return self._bridge.call("animation.fps.set", args)
-        if name == "animation.frame_duration.set":
-            return self._bridge.call("animation.frame_duration.set", args)
-        if name == "animation.loop.set":
-            return self._bridge.call("animation.loop.set", args)
-        if name == "tilemap.fill_rect":
-            return self._bridge.call("tilemap.fill_rect", args)
-        if name == "tilemap.replace_index":
-            return self._bridge.call("tilemap.replace_index", args)
-        if name == "tilemap.random_fill":
-            return self._bridge.call("tilemap.random_fill", args)
-        if name == "brush.list":
-            return self._bridge.call("brush.list", args)
-        if name == "brush.add":
-            return self._bridge.call("brush.add", args)
-        if name == "brush.remove":
-            return self._bridge.call("brush.remove", args)
-        if name == "brush.clear":
-            return self._bridge.call("brush.clear", args)
-        if name == "brush.stamp":
-            return self._bridge.call("brush.stamp", args)
-        if name == "brush.stroke":
-            return self._bridge.call("brush.stroke", args)
-        if name == "palette.import":
-            return self._bridge.call("palette.import", args)
-        if name == "palette.export":
-            return self._bridge.call("palette.export", args)
-        if name == "three_d.object.list":
-            return self._bridge.call("three_d.object.list", args)
-        if name == "three_d.object.add":
-            return self._bridge.call("three_d.object.add", args)
-        if name == "three_d.object.remove":
-            return self._bridge.call("three_d.object.remove", args)
-        if name == "three_d.object.update":
-            return self._bridge.call("three_d.object.update", args)
-        raise RuntimeError(f"unknown tool: {name}")
+
+        # Map to bridge method name and call
+        bridge_method = _BRIDGE_NAME_MAP.get(name, name)
+        return self._bridge.call(bridge_method, args)
+
+    def _handle_to_pixelart(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert a photo/image to pixel art and import into Pixelorama."""
+        if Image is None:
+            raise RuntimeError("Pillow is required: pip install Pillow")
+
+        img = self._load_image(args)
+        target_w = args.get("width", 64)
+        target_h = args.get("height", 64)
+        colors = args.get("colors", 0)
+        dither = args.get("dither", False)
+        project_name = args.get("project_name", "pixelart")
+        keep_aspect = args.get("keep_aspect", True)
+
+        # Calculate final dimensions
+        final_w, final_h = self._fit_dimensions(img, target_w, target_h, keep_aspect)
+
+        # Resize with nearest-neighbor for pixel art look
+        img = img.resize((final_w, final_h), Image.NEAREST)
+
+        # Quantize colors if requested
+        if colors > 0:
+            dither_mode = Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE
+            img = img.quantize(colors=colors, dither=dither_mode).convert("RGBA")
+
+        # Ensure RGBA for PNG export
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+
+        # Encode to base64 PNG
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64_png = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        # Create project and set region in Pixelorama
+        self._bridge.call("project.create", {"name": project_name, "width": final_w, "height": final_h})
+        self._bridge.call("pixel.set_region", {"x": 0, "y": 0, "data": b64_png, "format": "png", "mode": "replace"})
+
+        return {"ok": True, "width": final_w, "height": final_h, "colors": colors, "project": project_name}
+
+    @staticmethod
+    def _load_image(args: Dict[str, Any]) -> "Image.Image":
+        """Load image from base64 data or file path."""
+        image_data = args.get("image_data")
+        image_path = args.get("image_path")
+
+        if image_data:
+            raw = base64.b64decode(image_data)
+            return Image.open(io.BytesIO(raw))
+        if image_path:
+            return Image.open(image_path)
+
+        raise RuntimeError("image_data or image_path is required")
+
+    @staticmethod
+    def _fit_dimensions(img: "Image.Image", target_w: int, target_h: int, keep_aspect: bool) -> tuple:
+        """Calculate final pixel art dimensions, optionally preserving aspect ratio."""
+        if not keep_aspect:
+            return target_w, target_h
+
+        src_w, src_h = img.size
+        ratio = min(target_w / src_w, target_h / src_h)
+        final_w = max(1, int(src_w * ratio))
+        final_h = max(1, int(src_h * ratio))
+        return final_w, final_h
 
     def _ensure_bridge_protocol(self) -> None:
         if self._bridge_protocol_checked:
