@@ -1437,6 +1437,20 @@ _SKIP_PROTOCOL_CHECK = {"bridge.ping", "bridge.version", "bridge.info"}
 _SERVER_SIDE_TOOLS = {"image.to_pixelart"}
 
 
+def _deserialize_args(args: Dict[str, Any]) -> Dict[str, Any]:
+    """MCP clients may serialize arrays/objects as JSON strings. Parse them back."""
+    out = {}
+    for key, val in args.items():
+        if isinstance(val, str) and val and val[0] in ("[", "{"):
+            try:
+                out[key] = json.loads(val)
+            except (json.JSONDecodeError, ValueError):
+                out[key] = val
+        else:
+            out[key] = val
+    return out
+
+
 class MCPServer:
     def __init__(self):
         self._transport = StdioTransport()
@@ -1492,7 +1506,7 @@ class MCPServer:
 
     def _call_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
         name = params.get("name")
-        args = params.get("arguments", {})
+        args = _deserialize_args(params.get("arguments", {}))
 
         # Server-side tools (not passed through to bridge)
         if name == "image.to_pixelart":

@@ -922,6 +922,7 @@ func _handle_pixel_set(params: Dictionary) -> Dictionary:
 	var color := _parse_color(params.get("color", null))
 	cel.image.set_pixel(x, y, color)
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -937,6 +938,7 @@ func _handle_canvas_fill(params: Dictionary) -> Dictionary:
 	var color := _parse_color(params.get("color", null))
 	cel.image.fill(color)
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -951,6 +953,7 @@ func _handle_canvas_clear(params: Dictionary) -> Dictionary:
 		return _err("invalid_cel", "not a PixelCel")
 	cel.image.fill(Color.TRANSPARENT)
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -1058,6 +1061,7 @@ func _handle_draw_line(params: Dictionary) -> Dictionary:
 	var points := Geometry2D.bresenham_line(Vector2i(x1, y1), Vector2i(x2, y2))
 	_draw_points(cel.image, points, color, thickness)
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -1130,6 +1134,7 @@ func _handle_draw_text(params: Dictionary) -> Dictionary:
 		if cel.image is ImageExtended:
 			cel.image.convert_rgb_to_indexed()
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -1167,6 +1172,7 @@ func _handle_draw_gradient(params: Dictionary) -> Dictionary:
 			var c := from_color.lerp(to_color, t)
 			cel.image.set_pixel(xx, yy, c)
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -1198,6 +1204,7 @@ func _handle_draw_rect(params: Dictionary) -> Dictionary:
 			_draw_line_on_image(cel.image, Vector2i(rect.position.x + i, rect.position.y), Vector2i(rect.position.x + i, rect.position.y + rect.size.y - 1), color, 1)
 			_draw_line_on_image(cel.image, Vector2i(rect.position.x + rect.size.x - 1 - i, rect.position.y), Vector2i(rect.position.x + rect.size.x - 1 - i, rect.position.y + rect.size.y - 1), color, 1)
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -1228,6 +1235,7 @@ func _handle_draw_ellipse(params: Dictionary) -> Dictionary:
 		points = DrawingAlgos.get_ellipse_points(pos, size)
 	_draw_points(cel.image, points, color, 1)
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -1250,6 +1258,7 @@ func _handle_pixel_replace_color(params: Dictionary) -> Dictionary:
 			if _color_close(c, from_color, tolerance):
 				img.set_pixel(x, y, to_color)
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -1555,6 +1564,7 @@ func _handle_pixel_set_many(params: Dictionary) -> Dictionary:
 		cel.image.set_pixel(x, y, color)
 		count += 1
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"count": count}
 
 
@@ -1635,6 +1645,7 @@ func _handle_pixel_set_region(params: Dictionary) -> Dictionary:
 	if cel is CelTileMap:
 		(cel as CelTileMap).update_tilemap()
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true, "width": image.get_width(), "height": image.get_height()}
 
 
@@ -2281,6 +2292,7 @@ func _handle_effect_layer_apply(params: Dictionary) -> Dictionary:
 	if cel is CelTileMap:
 		(cel as CelTileMap).update_tilemap()
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	if bool(params.get("remove_after", true)):
 		layer.effects.remove_at(index)
 		layer.emit_effects_added_removed()
@@ -2316,6 +2328,7 @@ func _handle_effect_shader_apply(params: Dictionary) -> Dictionary:
 	if cel is CelTileMap:
 		(cel as CelTileMap).update_tilemap()
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -2462,6 +2475,7 @@ func _handle_brush_stamp(params: Dictionary) -> Dictionary:
 		spray_radius
 	)
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -2528,6 +2542,7 @@ func _handle_brush_stroke(params: Dictionary) -> Dictionary:
 			)
 		traveled += dist
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 	return {"ok": true}
 
 
@@ -3031,6 +3046,7 @@ func _ensure_pixel_cel_size(project: Project, cel: PixelCel) -> void:
 	fixed.blit_rect(img, src_rect, Vector2i.ZERO)
 	cel.image = fixed
 	cel.update_texture()
+	Global.current_project.change_cel(Global.current_project.current_frame, Global.current_project.current_layer)
 
 
 func _get_pixel_cel(frame: int, layer: int) -> PixelCel:
