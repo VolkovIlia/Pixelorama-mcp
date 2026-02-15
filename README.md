@@ -83,24 +83,26 @@ unzip extension/dist/PixeloramaMCP.zip \
 
 ## Интеграция с Claude Code
 
-Добавить в `.mcp.json` (в корне проекта или в `~/.claude/`):
+### Способ 1: через pip install (рекомендуется)
 
-```json
-{
-  "mcpServers": {
-    "pixelorama": {
-      "command": "python3",
-      "args": ["-m", "pixelorama_mcp"],
-      "cwd": "/path/to/Pixelorama-mcp/server",
-      "env": {
-        "PYTHONPATH": "/path/to/Pixelorama-mcp/server"
-      }
-    }
-  }
-}
+```bash
+cd server && pip install -e .
+claude mcp add pixelorama -- pixelorama-mcp
+```
+
+### Способ 2: без pip install
+
+```bash
+claude mcp add-json pixelorama '{"command":"python3","args":["-m","pixelorama_mcp"],"cwd":"/path/to/Pixelorama-mcp/server","env":{"PYTHONPATH":"/path/to/Pixelorama-mcp/server"}}'
 ```
 
 Заменить `/path/to/Pixelorama-mcp` на реальный путь к репозиторию.
+
+### Проверка
+
+```bash
+claude mcp list
+```
 
 ## Переменные окружения
 
