@@ -286,6 +286,25 @@ TOOLS = [
         },
     },
     {
+        "name": "canvas.snapshot",
+        "description": (
+            "Get a composited snapshot of all visible layers as a viewable PNG image. "
+            "Use this to see what the canvas looks like (visual feedback loop). "
+            "Returns the image inline so you can analyze it and continue drawing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "frame": {"type": "integer"},
+                "scale": {
+                    "type": "integer",
+                    "description": "Scale factor (default 1). Use 2-4 for small canvases to see detail.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "palette.list",
         "description": "List palettes.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
@@ -568,7 +587,7 @@ TOOLS = [
     },
     {
         "name": "pixel.get_region",
-        "description": "Get a region as PNG or raw base64.",
+        "description": "Get a region as PNG image (returned as viewable image content). Single layer only.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1436,18 +1455,41 @@ _SKIP_PROTOCOL_CHECK = {"bridge.ping", "bridge.version", "bridge.info"}
 # Tools handled server-side (not passed through to bridge)
 _SERVER_SIDE_TOOLS = {"image.to_pixelart"}
 
+# Tools that return image data ({"data": b64, "format": "png"})
+# These get MCP image content blocks in the response
+_IMAGE_TOOLS = {"pixel.get_region", "canvas.snapshot"}
+
+# Tools that modify pixel data and need a canvas refresh after execution
+_NEEDS_REFRESH = {
+    "pixel.set", "pixel.set_many", "pixel.set_region", "pixel.replace_color",
+    "canvas.fill", "canvas.clear", "canvas.resize", "canvas.crop",
+    "draw.line", "draw.rect", "draw.ellipse", "draw.erase_line",
+    "draw.text", "draw.gradient",
+    "effect.shader.apply", "effect.layer.apply",
+    "brush.stamp", "brush.stroke",
+    "project.create", "batch.exec",
+}
+
 
 def _deserialize_args(args: Dict[str, Any]) -> Dict[str, Any]:
-    """MCP clients may serialize arrays/objects as JSON strings. Parse them back."""
+    """MCP clients may serialize arrays/objects AND strings as JSON strings.
+
+    Claude Code MCP client JSON-encodes all non-primitive argument values:
+      - arrays:  [255,0,0,255]  → '"[255,0,0,255]"'  (starts with '[')
+      - objects: {"r":1}        → '"{\"r\":1}"'       (starts with '{')
+      - strings: "#ff0000"      → '"\"#ff0000\""'     (starts with '"')
+
+    We detect these and parse them back to their original types.
+    """
     out = {}
     for key, val in args.items():
-        if isinstance(val, str) and val and val[0] in ("[", "{"):
+        if isinstance(val, str) and val and val[0] in ("[", "{", '"'):
             try:
                 out[key] = json.loads(val)
+                continue
             except (json.JSONDecodeError, ValueError):
-                out[key] = val
-        else:
-            out[key] = val
+                pass
+        out[key] = val
     return out
 
 
@@ -1487,12 +1529,9 @@ class MCPServer:
             if method == "tools/call":
                 if msg_id is None:
                     return None
+                tool_name = params.get("name", "")
                 tool_result = self._call_tool(params)
-                wrapped = {
-                    "content": [
-                        {"type": "text", "text": json.dumps(tool_result, ensure_ascii=False)}
-                    ]
-                }
+                wrapped = self._wrap_tool_result(tool_name, tool_result)
                 return self._ok(msg_id, wrapped)
             if method in ("shutdown", "exit"):
                 return self._ok(msg_id, {"ok": True}) if msg_id is not None else None
@@ -1503,6 +1542,25 @@ class MCPServer:
             if msg_id is None:
                 return None
             return self._err(msg_id, "internal_error", str(exc))
+
+    def _wrap_tool_result(self, tool_name: str, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Wrap tool result as MCP content. Image tools get image content blocks."""
+        if tool_name in _IMAGE_TOOLS and isinstance(result, dict) and "data" in result:
+            fmt = result.get("format", "png")
+            if fmt == "png":
+                image_data = result["data"]
+                meta = {k: v for k, v in result.items() if k != "data"}
+                return {
+                    "content": [
+                        {"type": "text", "text": json.dumps(meta, ensure_ascii=False)},
+                        {"type": "image", "data": image_data, "mimeType": "image/png"},
+                    ]
+                }
+        return {
+            "content": [
+                {"type": "text", "text": json.dumps(result, ensure_ascii=False)}
+            ]
+        }
 
     def _call_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
         name = params.get("name")
@@ -1522,7 +1580,16 @@ class MCPServer:
 
         # Map to bridge method name and call
         bridge_method = _BRIDGE_NAME_MAP.get(name, name)
-        return self._bridge.call(bridge_method, args)
+        result = self._bridge.call(bridge_method, args)
+
+        # Force canvas refresh for drawing/modification tools
+        if name in _NEEDS_REFRESH:
+            try:
+                self._bridge.call("project.set_active", {})
+            except Exception:
+                pass
+
+        return result
 
     def _handle_to_pixelart(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Convert a photo/image to pixel art and import into Pixelorama."""
